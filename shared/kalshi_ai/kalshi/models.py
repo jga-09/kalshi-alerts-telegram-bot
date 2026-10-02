@@ -146,6 +146,11 @@ class KalshiOrderBook(BaseModel):
     def ask_for(self, side: Side) -> Decimal | None:
         return self.best_yes_ask if side == Side.YES else self.best_no_ask
 
+    def top_ask_size(self, side: Side) -> Decimal:
+        """Contracts available at the best ask of `side`."""
+        opposite = self.no_bids if side == Side.YES else self.yes_bids
+        return opposite[0].size if opposite else Decimal(0)
+
     def ask_depth(self, side: Side, limit_price: Decimal) -> Decimal:
         """Contracts available to BUY `side` at or below limit_price."""
         opposite = self.no_bids if side == Side.YES else self.yes_bids

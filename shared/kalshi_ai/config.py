@@ -114,8 +114,11 @@ class Settings(BaseSettings):
     reddit_user_agent: str = "kalshi-ai/0.1 (contact: admin@example.com)"
     x_bearer_token: SecretStr = SecretStr("")
     rss_feeds: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    deribit_enabled: bool = False
+    gold_data_provider: str = ""
+    economic_calendar_path: str = "scripts/economic_calendar.json"
     anthropic_api_key: SecretStr = SecretStr("")
-    llm_model: str = "claude-sonnet-5-5"
+    llm_model: str = "claude-opus-5-5"
     llm_enabled: bool = False
 
     # --- Trading defaults --------------------------------------------------
