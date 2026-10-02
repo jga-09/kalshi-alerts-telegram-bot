@@ -225,3 +225,32 @@ async def test_callback_answered(tg) -> None:
 
 def test_fake_market_data_is_importable() -> None:
     assert FakeMarketData() is not None
+
+
+async def test_disconnect_command(tg, sessionmaker) -> None:
+    from kalshi_ai.db.models import KalshiConnection
+    from kalshi_ai.domain.enums import KalshiConnectionStatus, KalshiEnvironment
+
+    rec, send, _, _ = tg
+    async with sessionmaker() as s:
+        u = await make_user(s, 5010)
+        s.add(
+            KalshiConnection(
+                user_id=u.id,
+                environment=KalshiEnvironment.DEMO,
+                encrypted_api_key_id=b"x",
+                encrypted_private_key=b"y",
+                api_key_id_hint="abcd",
+                public_key_fingerprint="f",
+                key_type="rsa",
+                scopes=["read"],
+                status=KalshiConnectionStatus.VERIFIED,
+            )
+        )
+        await s.commit()
+    await send(5010, "/disconnect")
+    assert "credentials were deleted" in rec.texts[-1]
+    async with sessionmaker() as s:
+        assert (await s.execute(select(KalshiConnection))).scalars().all() == []
+    await send(5010, "/disconnect")
+    assert "No Kalshi account" in rec.texts[-1]

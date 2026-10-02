@@ -32,6 +32,7 @@ COMMANDS = [
     ("subscribe", "Plans & billing"),
     ("subscription", "Subscription status"),
     ("connect", "Connect Kalshi (secure link)"),
+    ("disconnect", "Disconnect Kalshi"),
     ("account", "Account"),
     ("balance", "Balance"),
     ("markets", "Markets"),

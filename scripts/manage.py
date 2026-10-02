@@ -1,11 +1,11 @@
 """Operations CLI.
 
-    python scripts/manage.py gen-secrets
-    python scripts/manage.py grant-admin <telegram_id>
-    python scripts/manage.py revoke-admin <telegram_id>
-    python scripts/manage.py seed-plans                  # from STRIPE_PRICE_* env + --amounts
-    python scripts/manage.py create-codes pro 30 --count 5 --max-uses 1
-    python scripts/manage.py rotate-encryption           # re-encrypt secrets under the newest key
+python scripts/manage.py gen-secrets
+python scripts/manage.py grant-admin <telegram_id>
+python scripts/manage.py revoke-admin <telegram_id>
+python scripts/manage.py seed-plans                  # from STRIPE_PRICE_* env + --amounts
+python scripts/manage.py create-codes pro 30 --count 5 --max-uses 1
+python scripts/manage.py rotate-encryption           # re-encrypt secrets under the newest key
 """
 
 from __future__ import annotations
@@ -44,8 +44,14 @@ async def set_admin(telegram_id: int, grant: bool) -> None:
     async with session_scope() as session:
         user, _ = await get_or_create_telegram_user(session, telegram_id)
         user.role = UserRole.ADMIN if grant else UserRole.CUSTOMER
-        await audit(session, "admin.role." + ("granted" if grant else "revoked"), actor_type="system",
-                    target_type="user", target_id=user.id, details={"telegram_id": telegram_id, "via": "cli"})
+        await audit(
+            session,
+            "admin.role." + ("granted" if grant else "revoked"),
+            actor_type="system",
+            target_type="user",
+            target_id=user.id,
+            details={"telegram_id": telegram_id, "via": "cli"},
+        )
     print(("Granted" if grant else "Revoked") + f" admin role for Telegram user {telegram_id}")
 
 
@@ -57,8 +63,13 @@ async def seed_plans(amounts: dict[str, int]) -> None:
                 price_id = settings.stripe_price_id(plan.value, interval.value)
                 if not price_id:
                     continue
-                row = (await session.execute(select(SubscriptionPlan).where(
-                    SubscriptionPlan.plan == plan.value, SubscriptionPlan.interval == interval.value))).scalar_one_or_none()
+                row = (
+                    await session.execute(
+                        select(SubscriptionPlan).where(
+                            SubscriptionPlan.plan == plan.value, SubscriptionPlan.interval == interval.value
+                        )
+                    )
+                ).scalar_one_or_none()
                 if row is None:
                     row = SubscriptionPlan(plan=plan, interval=interval)
                     session.add(row)
@@ -74,8 +85,9 @@ async def create_codes(plan: str, days: int, count: int, max_uses: int, admin_te
             admin = (await session.execute(select(User).where(User.role == UserRole.ADMIN.value))).scalars().first()
         if admin is None:
             sys.exit("No admin user exists. Run grant-admin first.")
-        for g in await generate_codes(session, plan=Plan(plan), duration_days=days, count=count, max_uses=max_uses,
-                                      admin=admin, note="cli"):
+        for g in await generate_codes(
+            session, plan=Plan(plan), duration_days=days, count=count, max_uses=max_uses, admin=admin, note="cli"
+        ):
             print(g.code)
     print("# Codes are shown once and stored only as hashes.", file=sys.stderr)
 

@@ -7,7 +7,7 @@ python3.12 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 if [ ! -f .env ]; then
   cp .env.example .env
-  .venv/bin/python scripts/manage.py gen-secrets >> .env
+  .venv/bin/python scripts/gen_secrets.py >> .env
   echo "Created .env with fresh secrets - now add TELEGRAM_BOT_TOKEN, Stripe keys, ADMIN_TELEGRAM_IDS."
 fi
 .venv/bin/alembic -c backend/alembic.ini upgrade head

@@ -19,6 +19,7 @@ from kalshi_ai.notifications.messages import cents, usd
 from kalshi_ai.services.kalshi_connections import (
     connect_url,
     connection_can_trade,
+    disconnect,
     get_connection,
     issue_connect_token,
 )
@@ -142,6 +143,18 @@ async def cmd_connect(message: Message, session: AsyncSession, user: User, conta
 @router.callback_query(Menu.filter(F.action == "connect"))
 async def cb_connect(cb: CallbackQuery, session: AsyncSession, user: User, container: BotContainer) -> None:
     await show_connect(cb, session, user, container)
+
+
+@router.message(Command("disconnect"))
+async def cmd_disconnect(message: Message, session: AsyncSession, user: User) -> None:
+    removed = await disconnect(session, user)
+    await reply(
+        message,
+        "Kalshi disconnected. Your encrypted credentials were deleted and live trading is off.\n"
+        "Also revoke the API key on kalshi.com if you no longer use it."
+        if removed
+        else "No Kalshi account is connected.",
+    )
 
 
 async def show_balance(target: Target, session: AsyncSession, user: User, container: BotContainer) -> None:

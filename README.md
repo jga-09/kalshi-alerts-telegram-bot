@@ -1,292 +1,90 @@
-<p align="center">
-  <img src="cover.png" alt="Kalshi Alert Bot" width="800"/>
-</p>
+# Kalshi AI
 
-# Kalshi Alert Bot
+A subscription-based Telegram SaaS that analyzes Kalshi markets with market data, order-book flow, technicals,
+news, social sentiment and macro data. It produces **structured, evidence-based probability estimates**, runs
+**paper trading by default**, and — only after explicit opt-in and confirmation — can trade a customer's **own**
+Kalshi account through the **official Kalshi API**, subject to a deterministic risk engine and emergency stops.
 
-A minimal Telegram bot that sends real-time alerts for Kalshi prediction markets using WebSocket integration.
+> AI probabilities are estimates, not guarantees. Trading involves risk; automated trading can lose money.
+> Past performance does not guarantee future results.
 
-## Features
-
-- 📊 Real-time market price alerts with market titles and direct links
-- 🔔 Subscribe to markets by ticker or URL
-- 💾 Persistent subscription storage (SQLite)
-- 🔄 Automatic reconnection on disconnects
-- 📈 Price change notifications (>5 cent movements)
-- 🔗 Clickable links to view markets on Kalshi.com
-
-## Prerequisites
-
-- Python 3.8+
-- Telegram account
-- Kalshi account (for API access)
-
-## Setup Instructions
-
-### 1. Install Dependencies
-
-```powershell
-# Create a virtual environment (recommended)
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-
-# Install required packages
-pip install -r requirements.txt
-```
-
-### 2. Create Telegram Bot
-
-1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
-2. Send `/newbot` command
-3. Follow the instructions to create your bot
-4. Copy the bot token (looks like `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-
-### 3. Get Kalshi API Credentials
-
-1. Create an account at [kalshi.com](https://kalshi.com)
-2. Go to [API Keys Settings](https://kalshi.com/account/api-keys)
-3. Click "Generate New API Key"
-4. Download the private key file (`.pem`) - **Save this securely, you can't download it again!**
-5. Copy your API Key ID (looks like `a1b2c3d4-e5f6-...`)
-6. Note: The bot uses ONE set of API credentials to connect to Kalshi's WebSocket API for all users
-
-### 4. Configure Environment Variables
-
-```powershell
-# Copy the example environment file
-Copy-Item .env.example .env
-
-# Edit .env file with your credentials
-notepad .env
-```
-
-Add your credentials:
-```
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-KALSHI_API_KEY_ID=your_api_key_id_here
-KALSHI_PRIVATE_KEY_PATH=C:\path\to\your\private_key.pem
-PRICE_CHANGE_THRESHOLD=0.05
-```
-
-**Important:**
-- Use the full absolute path for `KALSHI_PRIVATE_KEY_PATH`
-- Keep your private key file secure and never commit it to git
-
-### 5. Run the Bot
-
-```powershell
-python bot.py
-```
-
-You should see output like:
-```
-2025-12-15 10:30:00 - __main__ - INFO - Starting Kalshi Alert Bot...
-2025-12-15 10:30:01 - kalshi_client - INFO - Private key loaded successfully
-2025-12-15 10:30:02 - kalshi_client - INFO - Connecting to Kalshi WebSocket...
-2025-12-15 10:30:02 - kalshi_client - INFO - Connected to Kalshi WebSocket
-2025-12-15 10:30:02 - __main__ - INFO - Telegram bot started
-```
-
-## Usage
-
-### Bot Commands
-
-Open your bot in Telegram and use these commands:
-
-- `/start` - Welcome message and introduction
-- `/subscribe <TICKER or URL>` - Subscribe to market alerts
-  - Example: `/subscribe KXHARRIS24-LSV`
-  - Example: `/subscribe https://kalshi.com/markets/kxharris24/...`
-- `/unsubscribe <TICKER>` - Unsubscribe from market alerts
-- `/list` - Show all your subscribed markets
-- `/help` - Display help message
-
-### Subscribing to Markets
-
-**Option 1: By Ticker**
-1. Visit [kalshi.com](https://kalshi.com)
-2. Browse or search for markets
-3. Find the ticker on the market page (e.g., `KXHARRIS24-LSV`)
-4. Use `/subscribe KXHARRIS24-LSV`
-
-**Option 2: By URL (Easy!)**
-1. Copy any Kalshi market URL
-2. Paste it with `/subscribe` command
-3. The bot will automatically extract the ticker and subscribe you
-
-### Example Workflow
+## Architecture
 
 ```
-You: /start
-Bot: 🤖 Welcome to Kalshi Alert Bot! ...
-
-You: /subscribe KXHARRIS24-LSV
-Bot: ✅ Subscribed to KXHARRIS24-LSV
-     Harris Kamala to win 2024 US Presidential Election
-     Current: 45-46¢
-
-     You'll receive alerts when prices change significantly.
-
-[Later, when price changes...]
-Bot: 📈 Price Alert
-
-     Harris Kamala to win 2024 US Presidential Election
-     KXHARRIS24-LSV
-
-     Bid: 45¢ → 52¢ 🔼 (+7¢)
-     Ask: 46¢ → 53¢ 🔼 (+7¢)
-
-     [View Market on Kalshi](https://kalshi.com/markets/...)
-
-You: /list
-Bot: 📊 Your Subscriptions (1):
-     • KXHARRIS24-LSV
-
-You: /unsubscribe KXHARRIS24-LSV
-Bot: ✅ Unsubscribed from KXHARRIS24-LSV
+DATA ──► FEATURES ──► MODEL ──► SIGNAL ──► RISK ENGINE ──► EXECUTION VALIDATOR ──► KALSHI
+ │         │            │         │             │                    │
+ │  point-in-time   ensemble   edge vs ask   deterministic     re-reads kill switches,
+ │  filter + hash   (+ bounded  + idempotency  limits, sizing   hard caps; persists
+ │                  LLM notes)   key                            PENDING before sending
+ └── source health feeds confidence; missing data => lower confidence, never invented values
 ```
 
-## Project Structure
+| Component | Path | Tech |
+|---|---|---|
+| Domain core (models, services, engines) | `shared/kalshi_ai` | Python 3.12, SQLAlchemy 2, Pydantic 2 |
+| REST API, Stripe webhooks, admin API | `backend/kalshi_ai_api` | FastAPI |
+| DB migrations | `backend/migrations` | Alembic (PostgreSQL 16) |
+| Telegram bot | `bot/kalshi_ai_bot` | aiogram 3 |
+| Background jobs | `worker/kalshi_ai_worker` | Celery + Redis |
+| Admin dashboard & customer web pages | `frontend` | Next.js 16, TypeScript, Tailwind 4 |
+| Tests | `tests` | pytest (unit, API, bot, security, acceptance) |
+| Deployment | `docker`, `docker-compose.yml` | Docker, Caddy (HTTPS) |
 
-```
-kalshi-alert-bot/
-├── bot.py                    # Main bot logic and Telegram handlers
-├── kalshi_client.py          # Kalshi WebSocket client
-├── subscription_manager.py   # SQLite subscription management
-├── requirements.txt          # Python dependencies
-├── .env                      # Environment variables (create from .env.example)
-├── .env.example             # Example environment variables
-├── .gitignore               # Git ignore rules
-└── subscriptions.db         # SQLite database (created automatically)
-```
+## Quick start (Docker)
 
-## How It Works
-
-1. **Telegram Bot**: Handles user commands and sends alerts
-2. **Kalshi WebSocket Client**: Maintains connection to Kalshi's real-time API
-3. **Subscription Manager**: Stores user subscriptions in SQLite database
-4. **Alert Logic**: Monitors price changes and sends alerts when threshold is exceeded
-
-### Architecture
-
-```
-User → Telegram Bot → Subscription Manager → SQLite DB
-                 ↓
-         Kalshi WebSocket Client
-                 ↓
-         Real-time Market Data
-                 ↓
-         Alert Logic → Telegram Bot → User
+```bash
+cp .env.example .env
+pip install cryptography && python3 scripts/gen_secrets.py >> .env   # later values override the blanks above
+# edit .env: TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_IDS (+ Stripe test keys to test billing)
+docker compose up --build
+docker compose exec api python scripts/manage.py grant-admin <your_telegram_id>
 ```
 
-## Configuration
+API: http://localhost:8000/docs · Web: http://localhost:3000 · Bot: message your bot `/start`.
 
-### Alert Threshold
+Without Docker, see [docs/SETUP.md](docs/SETUP.md) (`scripts/dev-setup.sh` + `scripts/run-local.sh`).
 
-Modify `PRICE_CHANGE_THRESHOLD` in `.env` to adjust alert sensitivity:
-- `0.05` = 5 cent change (default)
-- `0.01` = 1 cent change (more sensitive)
-- `0.10` = 10 cent change (less sensitive)
+## Tests
 
-## Error Handling
-
-The bot includes:
-- Automatic WebSocket reconnection on disconnect
-- Re-subscription to markets after reconnection
-- Graceful handling of invalid tickers
-- Logging of all errors and events
-
-## Troubleshooting
-
-### Bot doesn't start
-
-```powershell
-# Check if environment variables are set
-Get-Content .env
-
-# Verify Python version (should be 3.8+)
-python --version
-
-# Check if dependencies are installed
-pip list | Select-String "telegram|websockets|aiohttp"
+```bash
+scripts/run-tests.sh                                   # lint + all tests on SQLite + frontend typecheck
+TEST_DATABASE_URL=postgresql+asyncpg://kalshi:kalshi@localhost:5432/kalshi_ai_test scripts/run-tests.sh
 ```
 
-### Authentication fails
+150 tests cover security primitives, Kalshi signing/parsing, subscriptions, access codes, Stripe webhooks, the
+API (RBAC, CSRF, rate limits), the bot (real dispatcher), every analysis engine, the risk engine, the execution
+pipeline (each failure case), monitoring, backtesting (look-ahead guards) and a 25-step end-to-end acceptance test.
 
-- Verify your API Key ID is correct
-- Check that the private key file path is correct and accessible
-- Ensure the private key file matches the API Key ID
-- Confirm your Kalshi account is active
-- Check file permissions on the private key file
+## Documentation
 
-### WebSocket disconnects frequently
+| Doc | Contents |
+|---|---|
+| [SETUP](docs/SETUP.md) | Local setup, exact commands, where to get every credential |
+| [DEPLOYMENT](docs/DEPLOYMENT.md) | Production deployment, HTTPS, backups, scaling, runbook |
+| [TRADING_ENGINE](docs/TRADING_ENGINE.md) | Features, models, edge, risk profiles, execution pipeline, kill switches |
+| [KALSHI_INTEGRATION](docs/KALSHI_INTEGRATION.md) | Auth scheme, endpoints, connection flow, verification evidence |
+| [TELEGRAM](docs/TELEGRAM.md) | Commands, flows, webhook vs polling |
+| [STRIPE](docs/STRIPE.md) | Products/prices, webhooks, lifecycle mapping, refunds |
+| [SECURITY](SECURITY.md) | Threat model, controls, secret handling, reporting |
+| [BACKTESTING](docs/BACKTESTING.md) | Replay framework and its limitations |
+| [ADMIN_GUIDE](docs/ADMIN_GUIDE.md) | Dashboard, codes, users, kill switch, monitoring |
+| [CUSTOMER_GUIDE](docs/CUSTOMER_GUIDE.md) | Plain-language guide for subscribers |
+| [API](docs/API.md) | REST API reference (OpenAPI at `/docs` in non-production) |
+| [COMPLIANCE](docs/COMPLIANCE.md) | Legal/regulatory items to review with counsel **before launch** |
 
-- Check your internet connection
-- Review logs for error messages
-- The bot will automatically reconnect
+## Status & known limitations (read before production)
 
-### No alerts received
-
-- Verify you're subscribed: `/list`
-- Check if the market is actively trading
-- Ensure price changes exceed the threshold (default 5 cents)
-
-## Development
-
-### Running in Background (Windows)
-
-```powershell
-# Using Start-Process
-Start-Process python -ArgumentList "bot.py" -WindowStyle Hidden
-
-# Or use Task Scheduler for automatic startup
-```
-
-### Viewing Logs
-
-The bot logs to console. To save logs:
-
-```powershell
-python bot.py 2>&1 | Tee-Object -FilePath bot.log
-```
-
-## Future Enhancements
-
-Potential features to add:
-- Volume alerts
-- Trade alerts
-- Multiple alert thresholds per ticker
-- Market open/close notifications
-- Daily summaries
-- Market search functionality in bot
-- Admin dashboard
-
-## Security Notes
-
-- Keep your `.env` file secure and never commit it
-- Use a dedicated Kalshi account for the bot
-- The bot stores only Telegram chat IDs and tickers
-- Consider using environment-specific credentials
-
-## License
-
-MIT License - feel free to modify and use as needed
-
-## Support
-
-For issues or questions:
-1. Check the troubleshooting section
-2. Review Kalshi's API documentation
-3. Check Telegram bot API documentation
-
-## Credits
-
-Built with:
-- [python-telegram-bot](https://python-telegram-bot.org/)
-- [websockets](https://websockets.readthedocs.io/)
-- [aiohttp](https://docs.aiohttp.org/)
-- [Kalshi API](https://kalshi.com/)
-
----
-
-**Created by [Harish Garg](https://harishgarg.com)**
+* **Kalshi API verification.** `docs.kalshi.com` and Kalshi's API hosts were blocked from the build environment.
+  The integration was implemented against Kalshi's **official OpenAPI-generated SDK (kalshi_python 3.31.0)** and
+  Kalshi's official starter code, and is covered by mocked HTTP tests — but it has **not yet been exercised
+  against the live demo exchange**. Run the demo checklist in [KALSHI_INTEGRATION](docs/KALSHI_INTEGRATION.md)
+  (especially V2 `bid`/`ask` order direction) before enabling `LIVE_TRADING`.
+* **Series tickers** in `FEATURED_SERIES` are defaults to verify on kalshi.com.
+* **Licensed data** (spot gold, COMEX GC futures, ICE DXY) is an explicit adapter that reports *disabled* until
+  you plug in a licensed vendor; FRED's trade-weighted dollar is used as a DXY proxy.
+* **Settlement index.** Crypto markets settle on Kalshi's specified reference index; Coinbase candles are a proxy.
+* **Fees** in paper/backtests are estimates of Kalshi's published formula; live trading uses actual fills.
+* **Docker images** were validated with `docker compose config` but not built here (no Docker daemon in the
+  build sandbox); CI builds both images.
+* **Stripe** webhook handling is fully tested; Checkout/Portal session creation needs real test-mode keys.
+* **Legal**: disclosure texts are templates. See [COMPLIANCE](docs/COMPLIANCE.md).

@@ -29,6 +29,7 @@ HELP = (
     "/subscribe - plans &amp; billing\n"
     "/subscription - subscription status\n"
     "/connect - connect your Kalshi account (secure web form)\n"
+    "/disconnect - remove your Kalshi connection\n"
     "/account /profile - your account\n"
     "/balance /positions /orders - portfolio\n"
     "/markets - supported markets\n"
