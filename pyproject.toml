@@ -73,6 +73,8 @@ known-first-party = ["kalshi_ai", "kalshi_ai_api", "kalshi_ai_bot", "kalshi_ai_w
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S108", "S505", "E501"]
+"bot/kalshi_ai_bot/handlers/**" = ["E501"]  # user-facing copy lines
+"bot/kalshi_ai_bot/texts.py" = ["S105", "E501"]
 
 [tool.mypy]
 python_version = "3.12"

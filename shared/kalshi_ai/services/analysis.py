@@ -56,17 +56,18 @@ class AnalysisService:
     async def build_context(
         self, session: AsyncSession, ticker: str, now: datetime | None = None
     ) -> tuple[MarketContext, KalshiOrderBook]:
-        now = now or utcnow()
         market = await self.markets.get_market(ticker)
         book = await self.markets.get_orderbook(ticker)
         try:
             trades = await self.markets.get_trades(
-                ticker, limit=200, min_ts=int((now - timedelta(minutes=30)).timestamp())
+                ticker, limit=200, min_ts=int((utcnow() - timedelta(minutes=30)).timestamp())
             )
         except KalshiError:
             trades = []
         spec = classify_market(market)
         candles = {spec.underlying: await self.candles(spec.underlying)} if spec.underlying else {}
+        # "As of" is the moment all live inputs are in hand; anything fetched later would be excluded.
+        now = now or utcnow()
         point_rows = (
             (
                 await session.execute(

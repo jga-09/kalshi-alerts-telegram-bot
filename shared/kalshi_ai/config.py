@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     kalshi_max_retries: int = 2
     # Keys whose scopes allow moving money out (write / write::transfer) are rejected unless enabled.
     kalshi_allow_transfer_scope: bool = False
+    # Series scanned for signals / the /markets menu. Verify current series tickers on kalshi.com.
+    featured_series: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["KXBTC15M", "KXBTCD", "KXETH15M", "KXGOLDD"]
+    )
 
     # --- Data sources (all optional) --------------------------------------
     news_api_key: SecretStr = SecretStr("")
@@ -144,7 +148,7 @@ class Settings(BaseSettings):
     hard_min_price: Decimal = Decimal("0.02")
     hard_max_price: Decimal = Decimal("0.98")
 
-    @field_validator("cors_origins", "rss_feeds", mode="before")
+    @field_validator("cors_origins", "rss_feeds", "featured_series", mode="before")
     @classmethod
     def _csv_list(cls, v: object) -> list[str]:
         return _split_csv(v)
