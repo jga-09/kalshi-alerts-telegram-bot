@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-ai"
+version = "0.1.0"
+description = "Kalshi AI - subscription Telegram SaaS for AI-assisted Kalshi market analysis with paper and opt-in live trading"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+dependencies = [
+    "fastapi>=0.142,<1.0",
+    "uvicorn[standard]>=0.54",
+    "pydantic>=2.13,<3",
+    "pydantic-settings>=2.14",
+    "sqlalchemy[asyncio]>=2.0.40,<2.2",
+    "alembic>=1.16",
+    "asyncpg>=0.30",
+    "psycopg[binary]>=3.2",
+    "redis>=6.0",
+    "celery>=5.5",
+    "aiogram>=3.20,<4",
+    "stripe>=16.0,<17",
+    "httpx>=0.28",
+    "cryptography>=45",
+    "pyjwt>=2.10",
+    "structlog>=25.1",
+    "numpy>=2.2",
+    "scikit-learn>=1.6",
+    "feedparser>=6.0.11",
+    "websockets>=15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=6.0",
+    "aiosqlite>=0.21",
+    "respx>=0.22",
+    "fakeredis>=2.29",
+    "ruff>=0.12",
+    "mypy>=1.16",
+    "pip-audit>=2.9",
+]
+llm = ["anthropic>=0.70"]
+
+[tool.setuptools.packages.find]
+where = ["shared", "backend", "bot", "worker"]
+include = ["kalshi_ai*", "kalshi_ai_api*", "kalshi_ai_bot*", "kalshi_ai_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires PostgreSQL/Redis (set TEST_DATABASE_URL / TEST_REDIS_URL)",
+    "acceptance: end-to-end flow tests",
+]
+filterwarnings = ["ignore::DeprecationWarning:celery.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC", "RUF"]
+ignore = ["S101", "B008", "RUF012", "S311"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["kalshi_ai", "kalshi_ai_api", "kalshi_ai_bot", "kalshi_ai_worker", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S505", "E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true

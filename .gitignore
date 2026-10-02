@@ -1,64 +1,40 @@
-# Environment variables
+# Secrets - never commit
 .env
-
-# API Keys
+.env.*
+!.env.example
 *.pem
 *.key
+secrets/
 
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
+.venv/
 venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
-# Database
+# Node / Next.js
+node_modules/
+.next/
+out/
+frontend/next-env.d.ts
+
+# Local data
 *.db
 *.sqlite
 *.sqlite3
+*.log
+models_store/
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*.swo
-*~
-
-# Logs
-*.log
-
-# Claude Code files
-.claude/
-CLAUDE.md
-
-# Test and utility scripts (not for release)
-test_*.py
-diagnose_*.py
-fix_*.py
-verify_*.py
-check_*.py
-
-# Development documentation (internal)
-QUICKSTART.md
-
-# Platform-specific run scripts
-run.ps1
-cover-image-note.md
+.DS_Store
