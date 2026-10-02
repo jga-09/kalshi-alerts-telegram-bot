@@ -30,7 +30,18 @@ DATA ──► FEATURES ──► MODEL ──► SIGNAL ──► RISK ENGINE �
 | Tests | `tests` | pytest (unit, API, bot, security, acceptance) |
 | Deployment | `docker`, `docker-compose.yml` | Docker, Caddy (HTTPS) |
 
-## Quick start (Docker)
+## Easiest: one-command setup (Ubuntu/Debian)
+
+```bash
+git clone https://github.com/jga-09/kalshi-alerts-telegram-bot.git && cd kalshi-alerts-telegram-bot
+git checkout claude/kalshi-ai-saas-ivlmc2
+bash scripts/setup-linux.sh
+```
+
+It installs Docker if needed, generates secrets, asks for your bot token and Telegram ID (verified with Telegram),
+starts everything and makes you admin.
+
+## Quick start (Docker, manual)
 
 ```bash
 cp .env.example .env
