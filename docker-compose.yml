@@ -1,0 +1,98 @@
+# Local development & single-host deployment.
+#   cp .env.example .env   # then fill in values
+#   docker compose up --build
+# Production HTTPS: docker compose --profile https up -d   (requires DOMAIN in .env)
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: docker/backend.Dockerfile
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-kalshi}:${POSTGRES_PASSWORD:-kalshi}@postgres:5432/${POSTGRES_DB:-kalshi_ai}
+    REDIS_URL: redis://redis:6379/0
+    APP_ENV: ${APP_ENV:-development}
+  restart: unless-stopped
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    migrate: { condition: service_completed_successfully }
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kalshi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kalshi}
+      POSTGRES_DB: ${POSTGRES_DB:-kalshi_ai}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kalshi} -d ${POSTGRES_DB:-kalshi_ai}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["alembic", "-c", "backend/alembic.ini", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *backend
+    ports: ["127.0.0.1:8000:8000"]
+
+  bot:
+    <<: *backend
+    command: ["python", "-m", "kalshi_ai_bot.main"]
+    healthcheck: { disable: true }
+
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "kalshi_ai_worker.celery_app", "worker", "-Q", "urgent,default", "-l", "info", "--concurrency", "4"]
+    healthcheck: { disable: true }
+
+  beat:
+    <<: *backend
+    command: ["celery", "-A", "kalshi_ai_worker.celery_app", "beat", "-l", "info", "--schedule", "/tmp/celerybeat-schedule"]
+    healthcheck: { disable: true }
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-KalshiAIBot}
+    environment:
+      API_INTERNAL_URL: http://api:8000
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [api]
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN for HTTPS}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [frontend, api]
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:

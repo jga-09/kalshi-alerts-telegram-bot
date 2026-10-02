@@ -1,0 +1,14 @@
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+frontend/node_modules
+frontend/.next
+.env
+.env.*
+*.pem
+*.key
+models_store
