@@ -66,13 +66,24 @@ PY
 # --- 4. Telegram details ---------------------------------------------------------
 say "Telegram setup"
 echo "1) In Telegram, message @BotFather, send /newbot, and copy the token."
+echo "   Paste with Ctrl+Shift+V (plain Ctrl+V does not work in most Linux terminals)."
 while true; do
-  read -r -s -p "Paste your bot token (hidden as you type): " TOKEN; echo
-  [[ "$TOKEN" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{30,}$ ]] || { warn "That doesn't look like a bot token. Try again."; continue; }
+  read -r -p "Paste your bot token: " TOKEN
+  # Forgive common paste artefacts: spaces, quotes, a leading "TOKEN=" or "bot" prefix.
+  TOKEN=$(printf '%s' "$TOKEN" | tr -d '[:space:]"'"'" | sed -E 's/^(TELEGRAM_BOT_TOKEN=|bot)//')
+  printf '\033[1A\033[2K'  # erase the line so the token doesn't stay on screen
+  if [ -z "$TOKEN" ]; then
+    warn "Nothing was pasted. In the terminal use Ctrl+Shift+V or right-click -> Paste."; continue
+  fi
+  if ! [[ "$TOKEN" =~ ^[0-9]{6,12}:[A-Za-z0-9_-]{30,}$ ]]; then
+    warn "That doesn't look like a bot token (got ${#TOKEN} characters starting with '${TOKEN:0:4}...')."
+    warn "It should look like 123456789:AAH... - copy the whole line BotFather sent after 'Use this token'."
+    continue
+  fi
   RESP=$(curl -fsS "https://api.telegram.org/bot${TOKEN}/getMe" 2>/dev/null || true)
   USERNAME=$(printf '%s' "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['username'] if d.get('ok') else '')" 2>/dev/null || true)
   if [ -n "$USERNAME" ]; then echo "Token OK - bot is @$USERNAME"; break; fi
-  warn "Telegram rejected that token. Check it with @BotFather and try again."
+  warn "Telegram rejected that token (or the network is blocked). Check it with @BotFather and try again."
 done
 echo
 echo "2) Message @userinfobot in Telegram to get your numeric ID."
