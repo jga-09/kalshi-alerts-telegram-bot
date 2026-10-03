@@ -46,6 +46,7 @@ if [ ! -f .env ]; then
 else
   say ".env already exists - keeping your existing secrets"
 fi
+python3 scripts/fix_env.py .env
 
 set_env() {  # set_env KEY VALUE  (replaces every KEY= line; appends if absent)
   python3 - "$1" "$2" <<'PY'

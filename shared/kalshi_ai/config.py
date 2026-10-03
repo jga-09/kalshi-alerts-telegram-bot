@@ -51,6 +51,14 @@ def _split_csv(value: object) -> list[str]:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_comment_values(cls, data: object) -> object:
+        """`KEY=   # note` in an env file can arrive as the literal value "# note"; treat it as unset."""
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip().startswith("#"))}
+        return data
+
     # --- Application -------------------------------------------------------
     app_name: str = "Kalshi AI"
     app_env: AppEnv = AppEnv.DEVELOPMENT
@@ -82,6 +90,7 @@ class Settings(BaseSettings):
     telegram_bot_username: str = "KalshiAIBot"
     # Shared secret used by the bot when calling the internal API and for webhook mode.
     internal_api_token: SecretStr = SecretStr("dev-only-internal-token")
+    telegram_webhook_url: str = ""  # polling when empty
     telegram_webhook_secret: SecretStr = SecretStr("")
 
     # --- Stripe ------------------------------------------------------------

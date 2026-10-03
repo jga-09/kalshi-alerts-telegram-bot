@@ -109,7 +109,7 @@ async def run() -> None:
         await connect_telegram(bot)
         storage = RedisStorage(Redis.from_url(settings.redis_url))
         dp = build_dispatcher(container, storage)
-        webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL")
+        webhook_url = settings.telegram_webhook_url.strip()
         log.info("bot_starting", mode="webhook" if webhook_url else "polling")
         if webhook_url:
             from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
