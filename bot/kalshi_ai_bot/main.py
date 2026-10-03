@@ -10,6 +10,7 @@ import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -71,6 +72,32 @@ def build_bot(settings: Settings) -> Bot:
     return Bot(token=token, default=DefaultBotProperties(parse_mode="HTML"))
 
 
+async def connect_telegram(bot: Bot, max_delay: float = 60.0) -> None:
+    """Check the token and register commands, retrying network failures instead of crash-looping."""
+    delay = 2.0
+    while True:
+        try:
+            me = await bot.get_me()
+            await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS])
+            log.info("telegram_connected", bot_username=me.username)
+            print(f"Connected to Telegram as @{me.username}. Send /start to your bot.", flush=True)
+            return
+        except TelegramUnauthorizedError:
+            raise SystemExit(
+                "Telegram rejected TELEGRAM_BOT_TOKEN (Unauthorized). The token in .env is wrong or was revoked. "
+                "Get the current token from @BotFather, then re-run: bash scripts/setup-linux.sh"
+            ) from None
+        except TelegramNetworkError as exc:
+            print(
+                f"Cannot reach api.telegram.org ({exc.message}). Check the internet connection; "
+                f"retrying in {delay:.0f}s.",
+                flush=True,
+            )
+            log.warning("telegram_unreachable", retry_in=delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, max_delay)
+
+
 async def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level, json_logs=settings.app_env.value != "development")
@@ -78,27 +105,38 @@ async def run() -> None:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     container = BotContainer.build(settings, redis)
     bot = build_bot(settings)
-    storage = RedisStorage(Redis.from_url(settings.redis_url))
-    dp = build_dispatcher(container, storage)
-    await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS])
-    webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL")
-    log.info("bot_starting", mode="webhook" if webhook_url else "polling")
-    if webhook_url:
-        from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-        from aiohttp import web
+    try:
+        await connect_telegram(bot)
+        storage = RedisStorage(Redis.from_url(settings.redis_url))
+        dp = build_dispatcher(container, storage)
+        webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL")
+        log.info("bot_starting", mode="webhook" if webhook_url else "polling")
+        if webhook_url:
+            from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+            from aiohttp import web
 
-        secret = settings.telegram_webhook_secret.get_secret_value() or None
-        await bot.set_webhook(webhook_url, secret_token=secret, drop_pending_updates=False)
-        app = web.Application()
-        SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=secret).register(app, path="/telegram/webhook")
-        setup_application(app, dp, bot=bot)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("BOT_PORT", "8081"))).start()  # noqa: S104
-        await asyncio.Event().wait()
-    else:
-        await bot.delete_webhook(drop_pending_updates=False)
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+            secret = settings.telegram_webhook_secret.get_secret_value() or None
+            await bot.set_webhook(webhook_url, secret_token=secret, drop_pending_updates=False)
+            app = web.Application()
+            SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=secret).register(app, path="/telegram/webhook")
+            setup_application(app, dp, bot=bot)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            await web.TCPSite(runner, "0.0.0.0", int(os.environ.get("BOT_PORT", "8081"))).start()  # noqa: S104
+            await asyncio.Event().wait()
+        else:
+            await bot.delete_webhook(drop_pending_updates=False)
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        detail = str(exc).replace(settings.telegram_bot_token.get_secret_value(), "<token>")[:300]
+        print(f"Bot stopped with an error: {type(exc).__name__}: {detail}", flush=True)
+        log.exception("bot_crashed")
+        raise
+    finally:
+        await bot.session.close()
+        await redis.aclose()
 
 
 def main() -> None:

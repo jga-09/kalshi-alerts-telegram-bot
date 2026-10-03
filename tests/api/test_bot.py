@@ -254,3 +254,51 @@ async def test_disconnect_command(tg, sessionmaker) -> None:
         assert (await s.execute(select(KalshiConnection))).scalars().all() == []
     await send(5010, "/disconnect")
     assert "No Kalshi account" in rec.texts[-1]
+
+
+class _FailingSession(RecordingSession):
+    def __init__(self, errors: list[Exception]) -> None:
+        super().__init__()
+        self.errors = errors
+
+    async def make_request(self, bot: Bot, method: TelegramMethod[Any], timeout: int | None = None) -> Any:  # noqa: ASYNC109
+        from aiogram.methods import GetMe
+        from aiogram.types import User as TgBotUser
+
+        if self.errors:
+            raise self.errors.pop(0)
+        self.requests.append(method)
+        if isinstance(method, GetMe):
+            return TgBotUser(id=1, is_bot=True, first_name="B", username="test_bot")
+        return True
+
+
+async def test_connect_telegram_bad_token_exits_with_clear_message() -> None:
+    from aiogram.exceptions import TelegramUnauthorizedError
+    from aiogram.methods import GetMe
+
+    from kalshi_ai_bot.main import connect_telegram
+
+    session = _FailingSession([TelegramUnauthorizedError(GetMe(), "Unauthorized")])
+    with pytest.raises(SystemExit, match="rejected TELEGRAM_BOT_TOKEN"):
+        await connect_telegram(Bot("123456:TEST-telegram-token-abcdefghijklmnopqrstuvwxyz", session=session))
+
+
+async def test_connect_telegram_retries_network_errors(monkeypatch) -> None:
+    import asyncio
+
+    from aiogram.exceptions import TelegramNetworkError
+    from aiogram.methods import GetMe
+
+    from kalshi_ai_bot.main import connect_telegram
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(d: float) -> None:
+        sleeps.append(d)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    session = _FailingSession([TelegramNetworkError(GetMe(), "down"), TelegramNetworkError(GetMe(), "down")])
+    await connect_telegram(Bot("123456:TEST-telegram-token-abcdefghijklmnopqrstuvwxyz", session=session))
+    assert sleeps == [2.0, 4.0]
+    assert any(type(r).__name__ == "SetMyCommands" for r in session.requests)
