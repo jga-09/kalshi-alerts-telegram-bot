@@ -1,0 +1,22 @@
+# Production reverse proxy with automatic HTTPS (Let's Encrypt). Set DOMAIN in .env.
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		-Server
+	}
+	# Stripe webhooks and the API are served by FastAPI; everything else by Next.js
+	# (Next.js also proxies /api/* to the backend so browser cookies stay first-party).
+	handle /api/stripe/webhook {
+		reverse_proxy api:8000
+	}
+	handle /health {
+		reverse_proxy api:8000
+	}
+	handle /telegram/webhook {
+		reverse_proxy bot:8081
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

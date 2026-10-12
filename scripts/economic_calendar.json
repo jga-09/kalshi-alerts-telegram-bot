@@ -1,0 +1,44 @@
+[
+  {
+    "name": "_NOTE: example entries only - operators MUST verify dates against official sources (federalreserve.gov, bls.gov) before relying on them"
+  },
+  {
+    "name": "FOMC Rate Decision",
+    "time": "2026-10-28T18:00:00Z",
+    "importance": "high",
+    "assets": [
+      "gold",
+      "crypto",
+      "macro"
+    ]
+  },
+  {
+    "name": "US CPI (Oct)",
+    "time": "2026-11-12T13:30:00Z",
+    "importance": "high",
+    "assets": [
+      "gold",
+      "crypto",
+      "macro"
+    ]
+  },
+  {
+    "name": "US Nonfarm Payrolls (Oct)",
+    "time": "2026-11-06T13:30:00Z",
+    "importance": "high",
+    "assets": [
+      "gold",
+      "macro"
+    ]
+  },
+  {
+    "name": "FOMC Rate Decision",
+    "time": "2026-12-09T19:00:00Z",
+    "importance": "high",
+    "assets": [
+      "gold",
+      "crypto",
+      "macro"
+    ]
+  }
+]
