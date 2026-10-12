@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from kalshi_ai.config import Settings, get_settings
 from kalshi_ai.db.models import Signal
-from kalshi_ai.domain.enums import ConfidenceLevel, Side, SignalAction
+from kalshi_ai.domain.enums import ConfidenceLevel, EntryStyle, Side, SignalAction, StrategyId
 from kalshi_ai.modeling.prediction import PredictionResult
 from kalshi_ai.services.trading_state import correlation_group
 
@@ -69,6 +69,8 @@ class SignalDecision:
     data_age_seconds: float
     reasons: dict[str, Any] = field(default_factory=dict)
     signal_id: Any = None
+    strategy: StrategyId | None = None  # None = the plain model view (analysis only, never auto-traded)
+    entry_style: EntryStyle = EntryStyle.TAKE
 
 
 class SignalEngine:
@@ -156,6 +158,8 @@ async def persist_signal(session: AsyncSession, decision: SignalDecision, predic
         expires_at=decision.expires_at,
         idempotency_key=decision.idempotency_key,
         reasons=decision.reasons,
+        strategy=decision.strategy.value if decision.strategy else None,
+        entry_style=decision.entry_style.value,
     )
     session.add(row)
     await session.flush()

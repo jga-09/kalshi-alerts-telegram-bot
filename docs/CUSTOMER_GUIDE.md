@@ -34,6 +34,14 @@ Send `/connect`. You get a private link (valid 15 minutes). On kalshi.com create
 
 `/risk` → LOW, PASSIVE or RISKY. LOW uses the smallest sizes and strictest filters. **No level is safe.**
 
+## 3b. Pick your strategies
+
+`/strategies` shows four strategies (🔨 Hammer, 🌀 Drift, 🎯 Fade, ⚡ Surge) with their paper results so far.
+Turn each on or off, give them relative sizes, and set the most you're willing to pay per contract. Until
+you change anything you get the preset for your risk level (PASSIVE = Hammer + Drift + Surge). Drift
+uses limit orders, so some of its trades won't fill. That's normal. Judge strategies by average profit per
+trade over many trades, not win rate. Details: [STRATEGIES.md](STRATEGIES.md).
+
 ## 4. Paper trade first
 
 `/paper` starts simulated trading with virtual money against real market prices. Check results with `/paper`

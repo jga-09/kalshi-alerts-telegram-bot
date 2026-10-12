@@ -106,8 +106,14 @@ class RiskEngine:
         self.max_data_age_seconds = max_data_age_seconds
 
     def evaluate(
-        self, signal: SignalView, account: AccountState, liquidity: LiquidityView, now: datetime
+        self,
+        signal: SignalView,
+        account: AccountState,
+        liquidity: LiquidityView,
+        now: datetime,
+        size_factor: Decimal = ONE,
     ) -> RiskDecision:
+        """``size_factor`` (0..1, per-strategy weight) can only shrink the Kelly-based size."""
         lim = self.limits
         checks: list[CheckResult] = []
 
@@ -178,13 +184,16 @@ class RiskEngine:
 
         quantity = 0
         if all(c.passed for c in checks):
-            quantity = self.size(signal, account, liquidity)
+            quantity = self.size(signal, account, liquidity, size_factor)
             check("order_size", quantity >= 1, "computed size < 1 contract after all caps")
         approved = all(c.passed for c in checks)
         return RiskDecision(approved=approved, quantity=quantity if approved else 0, checks=checks, risk_mode=self.mode)
 
-    def size(self, signal: SignalView, account: AccountState, liquidity: LiquidityView) -> int:
+    def size(
+        self, signal: SignalView, account: AccountState, liquidity: LiquidityView, size_factor: Decimal = ONE
+    ) -> int:
         lim = self.limits
+        size_factor = max(ZERO, min(ONE, size_factor))
         price = signal.entry_price
 
         def contracts(dollars: Decimal) -> int:
@@ -199,6 +208,7 @@ class RiskEngine:
             kelly_fraction_for_binary(signal.estimated_probability, price)
             * lim.kelly_fraction
             * (account.available_balance)
+            * size_factor
         )
         caps = [
             int(lim.max_position_contracts - account.position_contracts_in_market),

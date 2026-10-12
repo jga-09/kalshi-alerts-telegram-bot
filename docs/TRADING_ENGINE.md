@@ -45,6 +45,17 @@ Both YES and NO are evaluated; the better side is chosen. Actions:
 
 Signals expire after 3 minutes (or 1 minute before close). Idempotency key = `ticker:model_version:minute`.
 
+This "model view" signal is what `/signal` shows users. **Automated trading runs through strategies.**
+
+## 3b. Strategies (`shared/kalshi_ai/strategies`)
+
+Hammer (trend + edge, takes the ask), Drift (resting post-only limit inside the spread), Fade (cheap side
+after an overreaction) and Surge (Drift's strongest setups at the live ask, not weekdays 12–6pm ET) each
+turn the same prediction into their own signal (`signals.strategy`, key `ticker:strategy:minute:model`).
+Strategies that disagree on a market's side stand aside. The worker fans each signal out only to
+users who enabled that strategy. Per-strategy size weights scale the risk engine's Kelly size down
+(never up), and a per-user max entry price applies. See [STRATEGIES.md](STRATEGIES.md).
+
 ## 4. Risk engine (`shared/kalshi_ai/risk`)
 
 Effective limits = strictest of (profile, user overrides, hard global caps, platform env caps).

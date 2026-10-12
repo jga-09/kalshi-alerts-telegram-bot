@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any
+from decimal import Decimal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from kalshi_ai.analytics.performance import strategy_performance
 from kalshi_ai.db.models import Order, PaperTrade
-from kalshi_ai.domain.enums import RiskMode, TradingMode
+from kalshi_ai.domain.enums import RiskMode, StrategyId, TradingMode
 from kalshi_ai.services.kalshi_connections import get_connection
 from kalshi_ai.services.kill_switch import activate_user_kill_switch
+from kalshi_ai.services.strategy_settings import get_strategy_config, reset_strategy_config, save_strategy_config
 from kalshi_ai.services.subscriptions import get_access
 from kalshi_ai.services.trading_controls import (
     confirm_live_trading,
@@ -23,6 +26,7 @@ from kalshi_ai.services.trading_controls import (
 )
 from kalshi_ai.services.trading_state import open_positions
 from kalshi_ai.services.users import get_risk_settings
+from kalshi_ai.strategies.config import StrategyConfig
 from kalshi_ai_api.deps import CurrentUser, SessionDep
 
 router = APIRouter(prefix="/api/me", tags=["account"])
@@ -77,6 +81,43 @@ async def update_risk(body: RiskUpdate, user: CurrentUser, session: SessionDep) 
 
 class Toggle(BaseModel):
     enabled: bool
+
+
+class StrategyUpdate(BaseModel):
+    enabled: list[StrategyId] | None = None
+    weights: dict[StrategyId, Literal["0.5", "1", "1.5", "2"]] | None = None
+    max_price_cents: int | None = Field(default=None, ge=1, le=99)
+    reset_to_preset: bool = False
+
+
+def _strategies_payload(cfg: StrategyConfig) -> dict[str, Any]:
+    return {
+        **cfg.to_json(),
+        "customized": cfg.customized,
+        "size_factors": {s.value: str(cfg.size_factor(s)) for s in cfg.enabled},
+    }
+
+
+@router.get("/strategies")
+async def get_strategies(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    cfg = await get_strategy_config(session, user)
+    return {**_strategies_payload(cfg), "paper_performance": await strategy_performance(session, user.id)}
+
+
+@router.put("/strategies")
+async def update_strategies(body: StrategyUpdate, user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    if body.reset_to_preset:
+        return _strategies_payload(await reset_strategy_config(session, user))
+    cfg = await get_strategy_config(session, user)
+    weights = dict(cfg.weights)
+    weights.update({k: Decimal(v) for k, v in (body.weights or {}).items()})
+    new = StrategyConfig(
+        enabled=frozenset(body.enabled) if body.enabled is not None else cfg.enabled,
+        weights=weights,
+        max_price_cents=body.max_price_cents or cfg.max_price_cents,
+        customized=True,
+    )
+    return _strategies_payload(await save_strategy_config(session, user, new))
 
 
 @router.post("/auto-trading")
@@ -148,6 +189,7 @@ async def orders(user: CurrentUser, session: SessionDep, limit: int = 50) -> lis
             "mode": o.mode.value,
             "market_ticker": o.market_ticker,
             "side": o.side.value,
+            "strategy": o.strategy,
             "quantity": o.quantity,
             "price": str(o.price),
             "status": o.status.value,
@@ -172,6 +214,7 @@ async def paper_trades(user: CurrentUser, session: SessionDep, limit: int = 50) 
         {
             "market_ticker": t.market_ticker,
             "side": t.side.value,
+            "strategy": t.strategy,
             "quantity": t.quantity,
             "entry_price": str(t.entry_price),
             "exit_price": str(t.exit_price) if t.exit_price is not None else None,

@@ -100,6 +100,11 @@ def mark_and_settle() -> dict[str, int]:
     return _run(jobs.mark_and_settle)
 
 
+@app.task(name="kalshi_ai_worker.tasks.process_resting_orders")
+def process_resting_orders() -> dict[str, int]:
+    return _run(jobs.process_resting_orders)
+
+
 @app.task(name="kalshi_ai_worker.tasks.reconcile_live_orders")
 def reconcile_live_orders() -> int:
     return _run(jobs.reconcile_live_orders)

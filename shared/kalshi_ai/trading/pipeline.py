@@ -25,7 +25,7 @@ from kalshi_ai.config import Settings, get_settings
 from kalshi_ai.db.base import utcnow
 from kalshi_ai.db.models import Order, RiskSettings, User
 from kalshi_ai.domain.entitlements import Feature
-from kalshi_ai.domain.enums import OrderStatus, SignalAction, TradingMode, UserStatus
+from kalshi_ai.domain.enums import EntryStyle, OrderStatus, SignalAction, TradingMode, UserStatus
 from kalshi_ai.kalshi.errors import KalshiError
 from kalshi_ai.kalshi.models import KalshiMarket, KalshiOrderBook
 from kalshi_ai.logging import bind_context, get_logger
@@ -38,6 +38,7 @@ from kalshi_ai.services.subscriptions import get_access
 from kalshi_ai.services.trading_controls import limits_for
 from kalshi_ai.services.trading_state import account_state, ensure_paper_account
 from kalshi_ai.signals.engine import SignalDecision
+from kalshi_ai.strategies.config import load_strategy_config
 from kalshi_ai.trading.live import LiveBroker, LiveTradingEngine
 from kalshi_ai.trading.paper import PaperTradingEngine
 
@@ -151,6 +152,10 @@ class ExecutionPipeline:
             )
         if signal.action != SignalAction.TRADE_IF_RISK_PASSES or signal.signal_id is None:
             return ExecutionResult(Outcome.REJECTED, mode, reason=f"signal action is {signal.action.value}")
+        strategies = load_strategy_config(rs.strategy_config, rs.risk_mode)
+        if signal.strategy is not None and signal.strategy not in strategies.enabled:
+            return ExecutionResult(Outcome.INELIGIBLE, mode, reason=f"strategy {signal.strategy.value} is turned off")
+        maker = signal.entry_style == EntryStyle.MAKE
 
         existing = (
             await session.execute(
@@ -186,12 +191,19 @@ class ExecutionPipeline:
             ),
             CheckResult("price_available", current_ask is not None, "no ask available"),
         ]
+        entry_price = signal.entry_price  # maker: our resting limit price
         if current_ask is not None:
-            drift_ok = current_ask <= signal.entry_price + MAX_PRICE_DRIFT
-            market_checks.append(
-                CheckResult(
-                    "price_current", drift_ok, "" if drift_ok else f"ask moved {signal.entry_price}->{current_ask}"
+            if not maker:
+                entry_price = current_ask
+                drift_ok = current_ask <= signal.entry_price + MAX_PRICE_DRIFT
+                market_checks.append(
+                    CheckResult(
+                        "price_current", drift_ok, "" if drift_ok else f"ask moved {signal.entry_price}->{current_ask}"
+                    )
                 )
+            cap_ok = entry_price <= strategies.max_price
+            market_checks.append(
+                CheckResult("max_price_cap", cap_ok, "" if cap_ok else f"price {entry_price} above your max price")
             )
         book_age = (now - book.fetched_at).total_seconds()
         market_checks.append(
@@ -242,9 +254,9 @@ class ExecutionPipeline:
                 correlation_group=signal.correlation_group,
                 side=signal.side,
                 estimated_probability=signal.estimated_probability,
-                market_probability=current_ask,
-                entry_price=current_ask,
-                edge=signal.estimated_probability - current_ask,
+                market_probability=entry_price,
+                entry_price=entry_price,
+                edge=signal.estimated_probability - entry_price,
                 confidence=signal.confidence,
                 expires_at=signal.expires_at,
                 data_age_seconds=max(signal.data_age_seconds, book_age),
@@ -253,14 +265,17 @@ class ExecutionPipeline:
             spread = book.spread
             liquidity = LiquidityView(
                 spread=spread,
-                depth_at_limit=book.ask_depth(signal.side, current_ask),
+                # A resting order doesn't consume visible asks; size it by top-of-book activity instead.
+                depth_at_limit=book.top_ask_size(signal.side) if maker else book.ask_depth(signal.side, current_ask),
                 top_of_book_depth=book.top_ask_size(signal.side),
             )
-            decision = engine.evaluate(view, acct, liquidity, now)
+            size_factor = strategies.size_factor(signal.strategy) if signal.strategy else Decimal(1)
+            decision = engine.evaluate(view, acct, liquidity, now, size_factor=size_factor)
             if not decision.approved:
                 return await self._reject(session, user, signal, mode, rs, market_checks + decision.checks)
 
             # ---- Order construction + final validation ----
+            rests = maker and current_ask > entry_price  # if the ask already reached our limit, it fills now
             order = Order(
                 user_id=user.id,
                 signal_id=signal.signal_id,
@@ -269,17 +284,20 @@ class ExecutionPipeline:
                 side=signal.side,
                 action="buy",
                 quantity=decision.quantity,
-                price=current_ask,
-                yes_price=current_ask if signal.side.value == "yes" else Decimal(1) - current_ask,
+                price=entry_price,
+                yes_price=entry_price if signal.side.value == "yes" else Decimal(1) - entry_price,
                 book_side="bid" if signal.side.value == "yes" else "ask",
                 status=OrderStatus.PENDING,
                 client_order_id=client_order_id(user.id, signal.signal_id, mode),
                 risk_mode=rs.risk_mode,
                 model_version=signal.model_version,
                 estimated_probability=signal.estimated_probability,
-                market_probability=current_ask,
+                market_probability=entry_price,
                 edge=view.edge,
                 validation=self._validation_record(market_checks, decision),
+                strategy=signal.strategy.value if signal.strategy else None,
+                entry_style=EntryStyle.MAKE.value if rests else EntryStyle.TAKE.value,
+                expires_at=signal.expires_at if rests else None,
             )
             final = await self.final_validation(session, user, order, mode)
             if not all(c.passed for c in final):
@@ -415,6 +433,7 @@ class ExecutionPipeline:
             edge=order.edge,
             risk_mode=order.risk_mode.value if order.risk_mode else None,
             reason=order.reason,
+            strategy=order.strategy,
         )
         try:
             await self.notifier.send(user.telegram_chat_id, note.render())

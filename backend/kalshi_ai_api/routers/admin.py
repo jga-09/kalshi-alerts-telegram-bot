@@ -149,6 +149,7 @@ async def recent_trades(admin: AdminUser, session: SessionDep, limit: int = Quer
             "mode": o.mode.value,
             "market_ticker": o.market_ticker,
             "side": o.side.value,
+            "strategy": o.strategy,
             "quantity": o.quantity,
             "price": str(o.price),
             "status": o.status.value,

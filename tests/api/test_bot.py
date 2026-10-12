@@ -302,3 +302,33 @@ async def test_connect_telegram_retries_network_errors(monkeypatch) -> None:
     await connect_telegram(Bot("123456:TEST-telegram-token-abcdefghijklmnopqrstuvwxyz", session=session))
     assert sleeps == [2.0, 4.0]
     assert any(type(r).__name__ == "SetMyCommands" for r in session.requests)
+
+
+async def test_strategies_menu_toggle_and_max_price(tg, sessionmaker) -> None:
+    from kalshi_ai_bot.keyboards import StrategyCb
+
+    rec, send, press, _ = tg
+    async with sessionmaker() as s:
+        u = await make_user(s, 5011)
+        await give_subscription(s, u, Plan.AUTO)
+        await s.commit()
+    await send(5011, "/strategies")
+    text = rec.texts[-1]
+    assert "🔨 Hammer</b> - OFF" in text and "🌀 Drift</b> - ON" in text and "LOW preset" in text
+    assert "not by win rate" in text
+    await press(5011, StrategyCb(action="toggle", s="fade").pack())
+    assert "🎯 Fade</b> - ON" in rec.texts[-1] and "custom" in rec.texts[-1]
+    await press(5011, StrategyCb(action="maxp").pack())
+    assert "Max price:</b> 95¢" in rec.texts[-1]
+    async with sessionmaker() as s:
+        rs = (await s.execute(select(RiskSettings).where(RiskSettings.user_id == u.id))).scalar_one()
+        assert set(rs.strategy_config["enabled"]) == {"drift", "surge", "fade"}
+        assert rs.strategy_config["max_price_cents"] == 95
+    await press(5011, StrategyCb(action="preset").pack())
+    assert "LOW preset" in rec.texts[-1]
+
+
+async def test_strategies_menu_requires_subscription(tg) -> None:
+    rec, send, _, _ = tg
+    await send(5012, "/strategies")
+    assert rec.texts[-1] == "Your Kalshi AI subscription is inactive."

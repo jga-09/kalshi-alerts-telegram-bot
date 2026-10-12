@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -19,7 +20,7 @@ from kalshi_ai.db.models import Order, PaperTrade, Position
 from kalshi_ai.domain.enums import OrderStatus, PositionStatus, Side, TradingMode
 from kalshi_ai.kalshi.models import KalshiOrderBook
 from kalshi_ai.services.trading_state import apply_fill_to_position, ensure_paper_account, mark_to_market
-from kalshi_ai.trading.fees import estimate_taker_fee
+from kalshi_ai.trading.fees import estimate_maker_fee, estimate_taker_fee
 
 ONE = Decimal(1)
 ZERO = Decimal(0)
@@ -52,53 +53,123 @@ def simulate_ioc_fill(book: KalshiOrderBook, side: Side, quantity: int, limit_pr
 
 class PaperTradingEngine:
     async def execute(self, session: AsyncSession, order: Order, book: KalshiOrderBook) -> Order:
-        acct = await ensure_paper_account(session, order.user_id)
+        """Taker orders: IOC against the book. Maker orders: fill what crosses now, rest the remainder."""
         fill = simulate_ioc_fill(book, order.side, order.quantity, order.price)
-        if fill.filled == 0 or fill.avg_price is None:
+        if fill.filled and fill.avg_price is not None:
+            if not await record_paper_fill(session, order, fill.filled, fill.avg_price, fill.fees):
+                order.status = OrderStatus.REJECTED
+                order.reason = "insufficient paper balance"
+                return order
+        order.submitted_at = utcnow()
+        if order.filled_quantity >= order.quantity:
+            order.status = OrderStatus.FILLED
+        elif order.entry_style == "make":
+            order.status = OrderStatus.RESTING
+            order.reason = "resting limit order (waits for the price to come to it)"
+        elif order.filled_quantity > 0:
+            order.status = OrderStatus.PARTIALLY_FILLED
+        else:
             order.status = OrderStatus.CANCELED
             order.reason = "paper IOC: no liquidity at or better than limit price"
-            return order
-        total = fill.avg_price * fill.filled + fill.fees
-        if total > acct.cash_balance:
-            order.status = OrderStatus.REJECTED
-            order.reason = "insufficient paper balance"
-            return order
-        acct.cash_balance -= total
-        order.filled_quantity = Decimal(fill.filled)
-        order.avg_fill_price = fill.avg_price
-        order.fees = fill.fees
-        order.status = OrderStatus.FILLED if fill.filled == order.quantity else OrderStatus.PARTIALLY_FILLED
-        order.submitted_at = utcnow()
-        await apply_fill_to_position(
-            session,
-            user_id=order.user_id,
-            mode=TradingMode.PAPER,
-            ticker=order.market_ticker,
-            side=order.side,
-            quantity=Decimal(fill.filled),
-            price=fill.avg_price,
-            fees=fill.fees,
-        )
+        await session.flush()
+        return order
+
+
+async def record_paper_fill(session: AsyncSession, order: Order, filled: int, price: Decimal, fees: Decimal) -> bool:
+    """Apply one (possibly partial) paper fill. Returns False if the paper balance can't cover it."""
+    acct = await ensure_paper_account(session, order.user_id)
+    total = price * filled + fees
+    if total > acct.cash_balance:
+        return False
+    acct.cash_balance -= total
+    prev = order.filled_quantity
+    order.filled_quantity = prev + Decimal(filled)
+    order.avg_fill_price = ((order.avg_fill_price or ZERO) * prev + price * filled) / order.filled_quantity
+    order.avg_fill_price = order.avg_fill_price.quantize(Decimal("0.0001"))
+    order.fees += fees
+    await apply_fill_to_position(
+        session,
+        user_id=order.user_id,
+        mode=TradingMode.PAPER,
+        ticker=order.market_ticker,
+        side=order.side,
+        quantity=Decimal(filled),
+        price=price,
+        fees=fees,
+    )
+    trade = (await session.execute(select(PaperTrade).where(PaperTrade.order_id == order.id))).scalar_one_or_none()
+    if trade is None:
         session.add(
             PaperTrade(
                 user_id=order.user_id,
                 order_id=order.id,
                 market_ticker=order.market_ticker,
                 side=order.side,
-                quantity=fill.filled,
-                entry_price=fill.avg_price,
-                fees=fill.fees,
+                quantity=filled,
+                entry_price=price,
+                fees=fees,
                 estimated_probability=order.estimated_probability,
                 edge=order.edge,
                 risk_mode=order.risk_mode,
+                strategy=order.strategy,
             )
         )
-        await session.flush()
-        return order
+    else:
+        trade.entry_price = order.avg_fill_price
+        trade.quantity = int(order.filled_quantity)
+        trade.fees += fees
+    await session.flush()
+    return True
+
+
+async def process_resting_paper_orders(
+    session: AsyncSession, ticker: str, book: KalshiOrderBook | None, now: datetime | None = None
+) -> dict[str, int]:
+    """Fill resting paper limit orders the market has traded down to; cancel expired ones.
+
+    Conservative: a resting buy fills only when the opposite side is offered AT OR BELOW our limit
+    (someone is visibly willing to sell at our price), never assuming queue priority.
+    """
+    now = now or utcnow()
+    stats = {"filled": 0, "expired": 0}
+    orders = (
+        (
+            await session.execute(
+                select(Order).where(
+                    Order.market_ticker == ticker,
+                    Order.mode == TradingMode.PAPER.value,
+                    Order.status == OrderStatus.RESTING.value,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for o in orders:
+        remaining = o.quantity - int(o.filled_quantity)
+        if book is not None and remaining > 0:
+            fill = simulate_ioc_fill(book, o.side, remaining, o.price)
+            if fill.filled:
+                # A maker is paid its own limit price, with the (lower) maker fee estimate.
+                if await record_paper_fill(session, o, fill.filled, o.price, estimate_maker_fee(fill.filled, o.price)):
+                    stats["filled"] += 1
+                else:
+                    o.status = OrderStatus.CANCELED if o.filled_quantity == 0 else OrderStatus.PARTIALLY_FILLED
+                    o.reason = "insufficient paper balance when the limit order filled"
+                    continue
+        if o.filled_quantity >= o.quantity:
+            o.status = OrderStatus.FILLED
+        elif o.expires_at is None or now >= o.expires_at:
+            o.status = OrderStatus.CANCELED if o.filled_quantity == 0 else OrderStatus.PARTIALLY_FILLED
+            o.reason = "limit order expired " + ("unfilled" if o.filled_quantity == 0 else "partly filled")
+            stats["expired"] += 1
+    await session.flush()
+    return stats
 
 
 async def settle_paper_market(session: AsyncSession, ticker: str, result_yes: bool) -> int:
     """Close all open paper trades/positions in a settled market. Returns trades settled."""
+    await process_resting_paper_orders(session, ticker, None, now=datetime.max.replace(tzinfo=UTC))
     trades = (
         (
             await session.execute(

@@ -24,6 +24,12 @@ def usd(x: Decimal | float | None) -> str:
     return "n/a" if x is None else f"${float(x):,.2f}"
 
 
+def strategy_label(strategy: str) -> str:
+    from kalshi_ai.strategies.config import LABELS  # local: notifications must stay import-light
+
+    return next((v for k, v in LABELS.items() if k.value == strategy), strategy)
+
+
 @dataclass(frozen=True)
 class TradeNotification:
     mode: str  # paper | live
@@ -39,6 +45,7 @@ class TradeNotification:
     edge: Decimal | None
     risk_mode: str | None
     reason: str | None = None
+    strategy: str | None = None
 
     def render(self) -> str:
         title = "TRADE EXECUTED" if self.status in ("filled", "partially_filled") else f"ORDER {self.status.upper()}"
@@ -53,6 +60,7 @@ class TradeNotification:
             f"<b>Market:</b> {escape(self.market_title or self.market_ticker)}",
             f"<b>Ticker:</b> <code>{escape(self.market_ticker)}</code>",
             f"<b>Direction:</b> {escape(self.side.upper())}",
+            *([f"<b>Strategy:</b> {escape(strategy_label(self.strategy))}"] if self.strategy else []),
             f"<b>Entry:</b> {cents(self.entry_price)}",
             f"<b>Quantity:</b> {self.filled_quantity:g} of {self.quantity}",
             f"<b>Total exposure:</b> {usd(exposure)}",

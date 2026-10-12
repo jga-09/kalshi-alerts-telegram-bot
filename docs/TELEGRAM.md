@@ -21,6 +21,7 @@ Built with **aiogram 3** (`bot/kalshi_ai_bot`). HTML parse mode, inline keyboard
 | `/paper` (`/paper off`) | Start paper trading, show paper P&L and calibration | PRO+ |
 | `/risk` | Choose LOW / PASSIVE / RISKY | any |
 | `/autotrade` | Auto trading (paper first) and the LIVE review entry point | AUTO+ |
+| `/strategies` | Turn Hammer / Drift / Fade / Surge on/off, relative size, max price; per-strategy paper results | PRO+ |
 | `/settings` | Effective limits | any |
 | `/status` | Platform status and data-source health | any |
 | `/stop` | **Emergency stop** | any |
@@ -28,7 +29,7 @@ Built with **aiogram 3** (`bot/kalshi_ai_bot`). HTML parse mode, inline keyboard
 | `/admin`, `/gencode`, `/killswitch` | Admin only (role + configured ID) | admin |
 
 Main menu buttons: Signals · Markets · Balance · Positions · Auto Trade · Paper Trading · Risk Settings ·
-Connect Kalshi · Subscription · EMERGENCY STOP.
+Strategies · Connect Kalshi · Subscription · EMERGENCY STOP.
 
 ## Key flows
 

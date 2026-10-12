@@ -1,8 +1,10 @@
 """Backtesting framework.
 
 Replays historical market states (prices, order books, trades), candles, news and
-social data through the SAME FeatureEngine -> PredictionEngine -> SignalEngine ->
-RiskEngine -> fill-simulation path used live.
+social data through the SAME FeatureEngine -> PredictionEngine -> StrategyEngine ->
+RiskEngine -> fill-simulation path used live, and reports results per strategy.
+
+Resting (Drift) orders fill only on later frames whose asks reach the limit, before expiry.
 
 Look-ahead protection:
 * Each step builds a MarketContext with ``as_of = frame time``; FeatureEngine
@@ -19,18 +21,21 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
-from kalshi_ai.analytics.metrics import TradeRecord, brier_score, calibration_bins, log_loss, summarize
+from kalshi_ai.analytics.metrics import TradeRecord, brier_score, calibration_bins, log_loss, summarize, summarize_by
 from kalshi_ai.config import Settings, get_settings
 from kalshi_ai.data.base import Candle, DataPoint
-from kalshi_ai.domain.enums import RiskMode, SignalAction
+from kalshi_ai.domain.enums import EntryStyle, RiskMode
 from kalshi_ai.features.engine import FeatureEngine, MarketContext
 from kalshi_ai.kalshi.models import KalshiMarket, KalshiOrderBook, KalshiTrade
 from kalshi_ai.modeling.prediction import PredictionEngine
 from kalshi_ai.news.engine import Article
 from kalshi_ai.risk.engine import AccountState, LiquidityView, RiskEngine, SignalView
 from kalshi_ai.risk.profiles import effective_limits
-from kalshi_ai.signals.engine import SignalEngine
+from kalshi_ai.signals.engine import SignalDecision
 from kalshi_ai.social.engine import Post
+from kalshi_ai.strategies.config import PRESETS, StrategyConfig
+from kalshi_ai.strategies.engine import StrategyEngine
+from kalshi_ai.trading.fees import estimate_maker_fee
 from kalshi_ai.trading.paper import simulate_ioc_fill
 
 ZERO = Decimal(0)
@@ -72,6 +77,16 @@ class SimTrade:
     edge: Decimal
     pnl: Decimal | None = None
     won: bool | None = None
+    strategy: str = "model"
+
+
+@dataclass
+class _Resting:
+    ticker: str
+    signal: SignalDecision
+    remaining: int
+    expires_at: datetime
+    counted_fill: bool = False  # already counted as "filled" for the fill-rate statistic
 
 
 @dataclass
@@ -83,6 +98,8 @@ class BacktestReport:
     blocked_by_risk: dict[str, int]
     starting_balance: Decimal
     ending_balance: Decimal
+    by_strategy: dict[str, Any] = field(default_factory=dict)
+    fill_rate_by_strategy: dict[str, float | None] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +111,8 @@ class BacktestReport:
             "expected_value_per_trade": self.summary.get("average_trade_pnl"),
             "prediction_calibration": self.prediction_calibration,
             "blocked_by_risk": self.blocked_by_risk,
+            "by_strategy": self.by_strategy,
+            "fill_rate_by_strategy": self.fill_rate_by_strategy,
             "equity_curve": self.equity_curve,
             "disclaimer": "Hypothetical simulated results. Past performance does not guarantee future results.",
         }
@@ -128,6 +147,7 @@ class BacktestEngine:
         starting_balance: Decimal = Decimal("1000"),
         prediction_engine: PredictionEngine | None = None,
         settings: Settings | None = None,
+        strategies: StrategyConfig | None = None,
     ):
         self.data = dataset
         self.settings = settings or get_settings()
@@ -135,7 +155,8 @@ class BacktestEngine:
         self.starting_balance = starting_balance
         self.features = FeatureEngine()
         self.predictor = prediction_engine or PredictionEngine()
-        self.signals = SignalEngine(self.settings)
+        self.strategy_engine = StrategyEngine(self.settings)
+        self.strategies = strategies or StrategyConfig(enabled=frozenset(PRESETS[risk_mode]))
         self.risk = RiskEngine(
             effective_limits(risk_mode, None, self.settings),
             risk_mode,
@@ -146,6 +167,8 @@ class BacktestEngine:
 
     async def run(self) -> BacktestReport:
         acct = _SimAccount(self.starting_balance)
+        resting: list[_Resting] = []
+        attempts: dict[str, list[int]] = defaultdict(lambda: [0, 0])  # strategy -> [filled, orders]
         trades: list[SimTrade] = []
         blocked: dict[str, int] = defaultdict(int)
         pred_probs: list[float] = []
@@ -176,56 +199,15 @@ class BacktestEngine:
             if ticker in self.data.results:
                 pred_probs.append(pred.probability_yes)
                 pred_outcomes.append(1 if self.data.results[ticker] else 0)
-            decision = self.signals.decide(pred)
-            if decision is None or decision.action != SignalAction.TRADE_IF_RISK_PASSES:
-                continue
-            ask = frame.orderbook.ask_for(decision.side)
-            if ask is None:
-                continue
-            view = SignalView(
-                ticker,
-                decision.correlation_group,
-                decision.side,
-                decision.estimated_probability,
-                ask,
-                ask,
-                decision.estimated_probability - ask,
-                decision.confidence,
-                decision.expires_at,
-                decision.data_age_seconds,
-            )
-            liq = LiquidityView(
-                frame.orderbook.spread,
-                frame.orderbook.ask_depth(decision.side, ask),
-                frame.orderbook.top_ask_size(decision.side),
-            )
-            risk = self.risk.evaluate(view, acct.state(ticker, decision.correlation_group, as_of.date()), liq, as_of)
-            if not risk.approved:
-                for c in risk.failed:
-                    blocked[c.name] += 1
-                continue
-            fill = simulate_ioc_fill(frame.orderbook, decision.side, risk.quantity, ask)
-            if fill.filled == 0 or fill.avg_price is None:
-                blocked["no_fill"] += 1
-                continue
-            cost = fill.avg_price * fill.filled + fill.fees
-            acct.balance -= cost
-            acct.positions[ticker] += fill.filled
-            acct.exposure[ticker] += cost
-            acct.trades_by_day[as_of.date()] += 1
-            trades.append(
-                SimTrade(
-                    ticker,
-                    as_of,
-                    decision.side.value,
-                    fill.filled,
-                    fill.avg_price,
-                    fill.fees,
-                    decision.estimated_probability,
-                    decision.estimated_probability - fill.avg_price,
-                )
-            )
+            self._fill_resting(resting, ticker, frame, as_of, acct, trades, attempts)
+            result = self.strategy_engine.evaluate(pred)
+            fired = {x.strategy: x for x in result.signals if x.strategy}
+            for strategy in self.strategies.select(set(fired)):
+                self._enter(fired[strategy], ticker, frame, as_of, acct, trades, blocked, resting, attempts)
             equity.append((as_of.isoformat(), float(acct.balance)))
+        for r in resting:
+            if r.remaining > 0:
+                blocked["limit_expired_unfilled"] += 1
 
         # Settlement - the only place results are read.
         for t in trades:
@@ -246,7 +228,7 @@ class BacktestEngine:
                 estimated_probability=t.estimated_probability,
                 entry_price=t.price,
                 won=t.won,
-                tags={"market": t.ticker.split("-", 1)[0]},
+                tags={"market": t.ticker.split("-", 1)[0], "strategy": t.strategy},
             )
             for t in trades
         ]
@@ -263,4 +245,118 @@ class BacktestEngine:
             blocked_by_risk=dict(blocked),
             starting_balance=self.starting_balance,
             ending_balance=acct.balance,
+            by_strategy=summarize_by(records, "strategy"),
+            fill_rate_by_strategy={k: (f / n if n else None) for k, (f, n) in sorted(attempts.items())},
+        )
+
+    def _enter(
+        self,
+        sig: SignalDecision,
+        ticker: str,
+        frame: HistoricalFrame,
+        as_of: datetime,
+        acct: _SimAccount,
+        trades: list[SimTrade],
+        blocked: dict[str, int],
+        resting: list[_Resting],
+        attempts: dict[str, list[int]],
+    ) -> None:
+        assert sig.strategy is not None
+        book = frame.orderbook
+        ask = book.ask_for(sig.side)
+        if ask is None:
+            return
+        maker = sig.entry_style == EntryStyle.MAKE
+        price = sig.entry_price if maker else ask
+        if price > self.strategies.max_price:
+            blocked["max_price_cap"] += 1
+            return
+        view = SignalView(
+            ticker,
+            sig.correlation_group,
+            sig.side,
+            sig.estimated_probability,
+            price,
+            price,
+            sig.estimated_probability - price,
+            sig.confidence,
+            sig.expires_at,
+            sig.data_age_seconds,
+        )
+        depth = book.top_ask_size(sig.side) if maker else book.ask_depth(sig.side, ask)
+        liq = LiquidityView(book.spread, depth, book.top_ask_size(sig.side))
+        risk = self.risk.evaluate(
+            view,
+            acct.state(ticker, sig.correlation_group, as_of.date()),
+            liq,
+            as_of,
+            size_factor=self.strategies.size_factor(sig.strategy),
+        )
+        if not risk.approved:
+            for c in risk.failed:
+                blocked[c.name] += 1
+            return
+        attempts[sig.strategy.value][1] += 1
+        fill = simulate_ioc_fill(book, sig.side, risk.quantity, price)
+        if fill.filled and fill.avg_price is not None:
+            self._book_trade(sig, ticker, as_of, fill.filled, fill.avg_price, fill.fees, acct, trades)
+            attempts[sig.strategy.value][0] += 1
+        remaining = risk.quantity - fill.filled
+        if maker and remaining > 0:
+            resting.append(_Resting(ticker, sig, remaining, sig.expires_at, counted_fill=bool(fill.filled)))
+        elif not fill.filled:
+            blocked["no_fill"] += 1
+
+    def _fill_resting(
+        self,
+        resting: list[_Resting],
+        ticker: str,
+        frame: HistoricalFrame,
+        as_of: datetime,
+        acct: _SimAccount,
+        trades: list[SimTrade],
+        attempts: dict[str, list[int]],
+    ) -> None:
+        for r in resting:
+            if r.ticker != ticker or r.remaining <= 0 or as_of > r.expires_at:
+                continue
+            limit = r.signal.entry_price
+            fill = simulate_ioc_fill(frame.orderbook, r.signal.side, r.remaining, limit)
+            if fill.filled:
+                # A maker is paid its own limit price, with the maker fee estimate.
+                fee = estimate_maker_fee(fill.filled, limit)
+                self._book_trade(r.signal, ticker, as_of, fill.filled, limit, fee, acct, trades)
+                r.remaining -= fill.filled
+                if not r.counted_fill and r.signal.strategy is not None:
+                    attempts[r.signal.strategy.value][0] += 1
+                    r.counted_fill = True
+
+    @staticmethod
+    def _book_trade(
+        sig: SignalDecision,
+        ticker: str,
+        as_of: datetime,
+        qty: int,
+        price: Decimal,
+        fees: Decimal,
+        acct: _SimAccount,
+        trades: list[SimTrade],
+    ) -> None:
+        cost = price * qty + fees
+        acct.balance -= cost
+        acct.positions[ticker] += qty
+        acct.exposure[ticker] += cost
+        acct.trades_by_day[as_of.date()] += 1
+        trades.append(
+            SimTrade(
+                ticker,
+                as_of,
+                sig.side.value,
+                qty,
+                price,
+                fees,
+                sig.estimated_probability,
+                sig.estimated_probability - price,
+                strategy=sig.strategy.value if sig.strategy else "model",
+            )
         )

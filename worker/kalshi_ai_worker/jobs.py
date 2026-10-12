@@ -34,9 +34,10 @@ from kalshi_ai.notifications.messages import Notifier, render_signal
 from kalshi_ai.services.analysis import AnalysisService
 from kalshi_ai.services.ingestion import run_connector
 from kalshi_ai.services.subscriptions import expire_due_subscriptions, get_access
+from kalshi_ai.strategies.config import load_strategy_config
 from kalshi_ai.trading.emergency import cancel_open_orders
 from kalshi_ai.trading.live import LiveBroker, LiveTradingEngine
-from kalshi_ai.trading.paper import mark_paper_positions, settle_paper_market
+from kalshi_ai.trading.paper import mark_paper_positions, process_resting_paper_orders, settle_paper_market
 from kalshi_ai.trading.pipeline import ExecutionPipeline, MarketDataProvider
 
 log = get_logger(__name__)
@@ -111,31 +112,42 @@ async def scan_markets(ctx: JobContext, tickers: list[str] | None = None) -> dic
                 log.warning("analysis_failed", ticker=ticker, error=type(exc).__name__)
                 continue
         stats["analyzed"] += 1
-        if outcome is None or outcome.signal is None or outcome.signal.action != SignalAction.TRADE_IF_RISK_PASSES:
+        if outcome is None:
             continue
-        stats["signals"] += 1
-        async with ctx.sessionmaker() as session:
-            users = await _eligible_users(session)
-        for user, rs in users:
-            modes = ([TradingMode.PAPER] if rs.paper_trading_enabled else []) + (
-                [TradingMode.LIVE] if rs.live_trading_enabled else []
-            )
-            for mode in modes:
-                async with ctx.sessionmaker() as session:  # isolated transaction per user per mode
-                    try:
-                        fresh_user = await session.get(User, user.id)
-                        if fresh_user is None:
-                            continue
-                        res = await pipeline.execute(session, fresh_user, outcome.signal, mode)
-                        await session.commit()
-                        key = f"{mode.value}:{res.outcome.value}"
-                        stats["executions"][key] = stats["executions"].get(key, 0) + 1
-                    except Exception as exc:
-                        await session.rollback()
-                        log.error("execution_failed", user_id=str(user.id), mode=mode.value, error=type(exc).__name__)
-        if ctx.notifier is not None:
+        fired = {s.strategy: s for s in (outcome.strategies.signals if outcome.strategies else []) if s.strategy}
+        if fired:
+            stats["signals"] += len(fired)
+            async with ctx.sessionmaker() as session:
+                users = await _eligible_users(session)
+            for user, rs in users:
+                # Each user trades only the strategies they turned on (Surge supersedes Drift when both are on).
+                chosen = load_strategy_config(rs.strategy_config, rs.risk_mode).select(set(fired))
+                modes = ([TradingMode.PAPER] if rs.paper_trading_enabled else []) + (
+                    [TradingMode.LIVE] if rs.live_trading_enabled else []
+                )
+                for strategy in chosen:
+                    for mode in modes:
+                        await _execute_one(ctx, pipeline, user, fired[strategy], mode, stats)
+        if ctx.notifier is not None and outcome.signal and outcome.signal.action == SignalAction.TRADE_IF_RISK_PASSES:
             await _broadcast_signal(ctx, outcome)
     return stats
+
+
+async def _execute_one(
+    ctx: JobContext, pipeline: ExecutionPipeline, user: User, signal: Any, mode: TradingMode, stats: dict[str, Any]
+) -> None:
+    async with ctx.sessionmaker() as session:  # isolated transaction per user, strategy and mode
+        try:
+            fresh_user = await session.get(User, user.id)
+            if fresh_user is None:
+                return
+            res = await pipeline.execute(session, fresh_user, signal, mode)
+            await session.commit()
+            key = f"{mode.value}:{signal.strategy.value}:{res.outcome.value}"
+            stats["executions"][key] = stats["executions"].get(key, 0) + 1
+        except Exception as exc:
+            await session.rollback()
+            log.error("execution_failed", user_id=str(user.id), mode=mode.value, error=type(exc).__name__)
 
 
 async def _broadcast_signal(ctx: JobContext, outcome: Any) -> None:
@@ -247,6 +259,33 @@ async def mark_and_settle(ctx: JobContext) -> dict[str, int]:
     return stats
 
 
+async def process_resting_orders(ctx: JobContext) -> dict[str, int]:
+    """Fill or expire resting paper limit orders (Drift) against the current order book."""
+    stats = {"filled": 0, "expired": 0}
+    async with ctx.sessionmaker() as session:
+        tickers = set(
+            (
+                await session.execute(
+                    select(Order.market_ticker).where(
+                        Order.mode == TradingMode.PAPER.value, Order.status == OrderStatus.RESTING.value
+                    )
+                )
+            ).scalars()
+        )
+    for ticker in tickers:
+        async with ctx.sessionmaker() as session:
+            try:
+                book = await ctx.market_service.get_orderbook(ticker)
+            except KalshiError as exc:
+                log.warning("resting_book_failed", ticker=ticker, error=type(exc).__name__)
+                book = None  # still expire orders on time
+            res = await process_resting_paper_orders(session, ticker, book)
+            await session.commit()
+            for k, v in res.items():
+                stats[k] += v
+    return stats
+
+
 async def reconcile_live_orders(ctx: JobContext) -> int:
     """Resolve UNKNOWN/SUBMITTED live orders against the exchange (never resubmits)."""
     if ctx.broker_factory is None:
@@ -276,6 +315,13 @@ async def reconcile_live_orders(ctx: JobContext) -> int:
             broker = await ctx.broker_factory(session, user)
             try:
                 before = order.status
+                expired = order.expires_at is not None and utcnow() > order.expires_at + timedelta(seconds=30)
+                if order.status == OrderStatus.RESTING and expired and order.kalshi_order_id:
+                    # The exchange should already have expired it; cancel explicitly as a safety net.
+                    try:
+                        await broker.cancel(order.kalshi_order_id, order.market_ticker)
+                    except KalshiError:
+                        log.warning("expired_order_cancel_failed", order_id=str(order.id))
                 await engine.reconcile(session, order, broker)
                 fixed += int(order.status != before)
             finally:

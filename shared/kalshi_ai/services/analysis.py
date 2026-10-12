@@ -26,6 +26,7 @@ from kalshi_ai.modeling.prediction import PredictionEngine, PredictionResult, pe
 from kalshi_ai.news.engine import Article
 from kalshi_ai.signals.engine import SignalDecision, SignalEngine, persist_signal
 from kalshi_ai.social.engine import Post
+from kalshi_ai.strategies.engine import StrategyEngine, StrategyResult
 
 log = get_logger(__name__)
 CandleSource = Callable[[str], Awaitable[list[Candle]]]
@@ -34,8 +35,9 @@ CandleSource = Callable[[str], Awaitable[list[Candle]]]
 @dataclass
 class AnalysisOutcome:
     prediction: PredictionResult
-    signal: SignalDecision | None
+    signal: SignalDecision | None  # the plain model view (shown to users, never auto-traded)
     market: KalshiMarket
+    strategies: StrategyResult | None = None  # Hammer/Drift/Fade/Surge signals - these are what trade
 
 
 class AnalysisService:
@@ -52,6 +54,7 @@ class AnalysisService:
         self.features = FeatureEngine()
         self.predictor = prediction_engine or PredictionEngine()
         self.signals = SignalEngine(self.settings)
+        self.strategies = StrategyEngine(self.settings)
 
     async def build_context(
         self, session: AsyncSession, ticker: str, now: datetime | None = None
@@ -144,7 +147,10 @@ class AnalysisService:
         decision = self.signals.decide(pred)
         if decision is not None:
             await persist_signal(session, decision, row.id)
-        return AnalysisOutcome(pred, decision, ctx.market)
+        strategies = self.strategies.evaluate(pred)
+        for sig in strategies.signals:
+            await persist_signal(session, sig, row.id)
+        return AnalysisOutcome(pred, decision, ctx.market, strategies)
 
     async def _record_market(self, session: AsyncSession, m: KalshiMarket, book: KalshiOrderBook, asset: str) -> None:
         row = (await session.execute(select(Market).where(Market.ticker == m.ticker))).scalar_one_or_none()

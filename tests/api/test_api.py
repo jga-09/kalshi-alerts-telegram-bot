@@ -212,3 +212,22 @@ async def test_rate_limit(client, app) -> None:
     app.middleware_stack = app.build_middleware_stack()
     codes = [(await client.get("/api/disclosures")).status_code for _ in range(5)]
     assert codes[:3] == [200, 200, 200] and 429 in codes[3:]
+
+
+async def test_strategy_settings_api(client, session, user) -> None:
+    h = auth_headers(user)
+    r = (await client.get("/api/me/strategies", headers=h)).json()
+    assert r["customized"] is False and set(r["enabled"]) == {"drift", "surge"}  # LOW preset
+    assert "paper_performance" in r
+    r = await client.put(
+        "/api/me/strategies",
+        headers=h,
+        json={"enabled": ["hammer", "surge"], "weights": {"surge": "2"}, "max_price_cents": 75},
+    )
+    body = r.json()
+    assert r.status_code == 200 and body["customized"] is True
+    assert body["size_factors"] == {"hammer": "0.5000", "surge": "1.0000"} and body["max_price_cents"] == 75
+    bad = await client.put("/api/me/strategies", headers=h, json={"weights": {"hammer": "9"}})
+    assert bad.status_code == 422
+    reset = (await client.put("/api/me/strategies", headers=h, json={"reset_to_preset": True})).json()
+    assert reset["customized"] is False

@@ -36,6 +36,7 @@ HELP = (
     "/signal - AI analysis for a market\n"
     "/paper - paper trading\n"
     "/autotrade - automated trading\n"
+    "/strategies - choose strategies (Hammer, Drift, Fade, Surge)\n"
     "/risk - risk level\n"
     "/settings - your settings\n"
     "/status - system status\n"

@@ -7,6 +7,7 @@ the order is marked UNKNOWN and reconciled by client_order_id.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Protocol
 
@@ -75,6 +76,14 @@ class KalshiBroker:
 class LiveTradingEngine:
     async def execute(self, session: AsyncSession, order: Order, broker: LiveBroker) -> Order:
         intent = OrderIntent(order.market_ticker, order.side, order.quantity, order.price, order.client_order_id)
+        if order.entry_style == "make" and order.expires_at is not None:
+            # Resting limit order: post-only so it never takes, expires at the exchange on its own.
+            intent = replace(
+                intent,
+                time_in_force="good_till_canceled",
+                expiration_ts=int(order.expires_at.timestamp()),
+                post_only=True,
+            )
         order.submitted_at = utcnow()
         order.status = OrderStatus.SUBMITTED
         try:
@@ -157,7 +166,11 @@ class LiveTradingEngine:
         else:
             order.status = OrderStatus.RESTING if remaining > 0 else OrderStatus.CANCELED
             if order.status == OrderStatus.CANCELED:
-                order.reason = "IOC order not filled (no liquidity at limit)"
+                order.reason = (
+                    "limit order expired unfilled"
+                    if order.entry_style == "make"
+                    else "IOC order not filled (no liquidity at limit)"
+                )
         if newly_filled > 0:
             await apply_fill_to_position(
                 session,

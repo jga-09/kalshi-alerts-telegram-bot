@@ -86,6 +86,18 @@ class Side(StrEnum):
     NO = "no"
 
 
+class StrategyId(StrEnum):
+    HAMMER = "hammer"  # trend-following, takes the ask
+    DRIFT = "drift"  # value, rests a limit order inside the spread
+    FADE = "fade"  # contrarian, buys the cheap side after an overreaction
+    SURGE = "surge"  # Drift's strongest setups, taken at the live ask
+
+
+class EntryStyle(StrEnum):
+    TAKE = "take"  # immediate-or-cancel at the current ask
+    MAKE = "make"  # resting limit order (post-only live), cancelled at expiry
+
+
 class SignalAction(StrEnum):
     TRADE_IF_RISK_PASSES = "trade_if_risk_passes"
     WATCH = "watch"

@@ -24,7 +24,7 @@ from kalshi_ai.orderbook.analysis import analyze as analyze_orderbook
 from kalshi_ai.social.engine import Post, SocialAnalyzer
 from kalshi_ai.ta.engine import compute_features, probability_above_strike
 
-FEATURE_SET_VERSION = "fs-2026.10.1"
+FEATURE_SET_VERSION = "fs-2026.10.2"
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,8 @@ class FeatureEngine:
             f["market_prob_yes"] = float(ob.mid) if ob.mid is not None else None
             f["yes_ask"] = float(ob.best_yes_ask) if ob.best_yes_ask is not None else None
             f["no_ask"] = float(ctx.orderbook.best_no_ask) if ctx.orderbook.best_no_ask is not None else None
+            f["yes_bid"] = float(ctx.orderbook.best_yes_bid) if ctx.orderbook.best_yes_bid is not None else None
+            f["no_bid"] = float(ctx.orderbook.best_no_bid) if ctx.orderbook.best_no_bid is not None else None
             f["liquidity_ok"] = 1 if ob.liquidity_ok else 0
             age = (now - ctx.orderbook.fetched_at).total_seconds()
             ages.append(age)

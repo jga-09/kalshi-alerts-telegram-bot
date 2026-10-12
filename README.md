@@ -62,8 +62,8 @@ scripts/run-tests.sh                                   # lint + all tests on SQL
 TEST_DATABASE_URL=postgresql+asyncpg://kalshi:kalshi@localhost:5432/kalshi_ai_test scripts/run-tests.sh
 ```
 
-150 tests cover security primitives, Kalshi signing/parsing, subscriptions, access codes, Stripe webhooks, the
-API (RBAC, CSRF, rate limits), the bot (real dispatcher), every analysis engine, the risk engine, the execution
+176 tests cover security primitives, Kalshi signing/parsing, subscriptions, access codes, Stripe webhooks, the
+API (RBAC, CSRF, rate limits), the bot (real dispatcher), every analysis engine, the risk engine, the four trading strategies, the execution
 pipeline (each failure case), monitoring, backtesting (look-ahead guards) and a 25-step end-to-end acceptance test.
 
 ## Documentation
@@ -73,6 +73,7 @@ pipeline (each failure case), monitoring, backtesting (look-ahead guards) and a 
 | [SETUP](docs/SETUP.md) | Local setup, exact commands, where to get every credential |
 | [DEPLOYMENT](docs/DEPLOYMENT.md) | Production deployment, HTTPS, backups, scaling, runbook |
 | [TRADING_ENGINE](docs/TRADING_ENGINE.md) | Features, models, edge, risk profiles, execution pipeline, kill switches |
+| [STRATEGIES](docs/STRATEGIES.md) | Hammer, Drift, Fade, Surge: rules, presets, per-strategy sizing, how to judge them |
 | [KALSHI_INTEGRATION](docs/KALSHI_INTEGRATION.md) | Auth scheme, endpoints, connection flow, verification evidence |
 | [TELEGRAM](docs/TELEGRAM.md) | Commands, flows, webhook vs polling |
 | [STRIPE](docs/STRIPE.md) | Products/prices, webhooks, lifecycle mapping, refunds |

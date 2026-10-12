@@ -110,6 +110,8 @@ def mock_kalshi(router: respx.MockRouter, *, status: str = "active", result: str
 
 @respx.mock(assert_all_called=False)
 async def test_full_customer_journey(client, sessionmaker, redis, respx_mock, monkeypatch) -> None:
+    # Real wall-clock time is used below; keep Surge's weekday-afternoon blackout out of the way.
+    monkeypatch.setattr("kalshi_ai.strategies.engine.in_surge_blackout", lambda *a: False)
     import itertools
     from datetime import UTC, datetime
 
@@ -246,18 +248,22 @@ async def test_full_customer_journey(client, sessionmaker, redis, respx_mock, mo
 
     # 12-16. AI analysis -> signal -> risk -> paper order -> Telegram notification
     stats = await jobs.scan_markets(ctx, [T])
-    assert stats["analyzed"] == 1 and stats["signals"] == 1, stats
-    assert stats["executions"] == {"paper:executed": 1}, stats
+    # Strong, liquid, trending setup: Hammer, Drift and Surge all fire. The user's LOW-risk preset runs
+    # Drift + Surge, and with both on the setup is traded once - as Surge.
+    assert stats["analyzed"] == 1 and stats["signals"] == 3, stats
+    assert stats["executions"] == {"paper:surge:executed": 1}, stats
     async with sessionmaker() as s:
         pred = (await s.execute(select(Prediction))).scalar_one()
         feat = await s.get(FeatureSnapshot, pred.feature_id)
         assert feat.features["ta_available"] == 1 and feat.features["news_unique_stories"] >= 1  # TA + news used
         assert feat.features["social_available"] == 1.0
         assert pred.analysis["disclaimer"].startswith("Model probabilities are estimates")
-        sig = (await s.execute(select(Signal))).scalar_one()
+        sig = (await s.execute(select(Signal).where(Signal.strategy.is_(None)))).scalar_one()  # model view
         assert sig.edge == D("0.1500")
+        fired = {x.strategy for x in (await s.execute(select(Signal).where(Signal.strategy.is_not(None)))).scalars()}
+        assert fired == {"hammer", "drift", "surge"}
         order = (await s.execute(select(Order))).scalar_one()
-        assert order.mode == TradingMode.PAPER and order.status == OrderStatus.FILLED
+        assert order.mode == TradingMode.PAPER and order.status == OrderStatus.FILLED and order.strategy == "surge"
         assert order.validation["risk"]["approved"] is True
     trade_msgs = [t for _, t in notifier.sent if "PAPER TRADE EXECUTED" in t]
     assert trade_msgs and "Model probability (estimate)" in trade_msgs[0]
@@ -288,8 +294,8 @@ async def test_full_customer_journey(client, sessionmaker, redis, respx_mock, mo
 
     # 20-23. Live order passes all checks -> submitted to Kalshi -> status & position update
     stats = await jobs.scan_markets(ctx, [T])  # same minute => same signal => paper is a duplicate
-    assert stats["executions"].get("paper:duplicate") == 1
-    assert stats["executions"].get("live:executed") == 1, stats
+    assert stats["executions"].get("paper:surge:duplicate") == 1
+    assert stats["executions"].get("live:surge:executed") == 1, stats
     assert len(live_broker.placed) == 1
     async with sessionmaker() as s:
         live_order = (await s.execute(select(Order).where(Order.mode == TradingMode.LIVE.value))).scalar_one()

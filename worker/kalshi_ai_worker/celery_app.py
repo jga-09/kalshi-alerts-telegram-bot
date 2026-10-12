@@ -31,6 +31,7 @@ app.conf.update(
     beat_schedule={
         "ingest-data": {"task": "kalshi_ai_worker.tasks.ingest_data", "schedule": 60.0},
         "scan-markets": {"task": "kalshi_ai_worker.tasks.scan_markets", "schedule": 60.0},
+        "resting-orders": {"task": "kalshi_ai_worker.tasks.process_resting_orders", "schedule": 30.0},
         "mark-and-settle": {"task": "kalshi_ai_worker.tasks.mark_and_settle", "schedule": 120.0},
         "reconcile-live": {"task": "kalshi_ai_worker.tasks.reconcile_live_orders", "schedule": 120.0},
         "expire-subscriptions": {"task": "kalshi_ai_worker.tasks.expire_subscriptions", "schedule": 300.0},

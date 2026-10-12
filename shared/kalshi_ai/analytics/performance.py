@@ -28,6 +28,7 @@ def _paper_record(t: PaperTrade) -> TradeRecord:
             "market": t.market_ticker.split("-", 1)[0],
             "hour_utc": f"{t.opened_at.hour:02d}",
             "risk_mode": t.risk_mode.value if t.risk_mode else "unknown",
+            "strategy": t.strategy or "model",
             "mode": "paper",
         },
     )
@@ -89,7 +90,41 @@ async def platform_performance(session: AsyncSession, days: int = 30) -> dict[st
         "paper_by_market": summarize_by(paper, "market"),
         "paper_by_hour": summarize_by(paper, "hour_utc"),
         "paper_by_risk_mode": summarize_by(paper, "risk_mode"),
+        "paper_by_strategy": summarize_by(paper, "strategy"),
+        "fill_rate_by_strategy": await fill_rates(session, since=since),
     }
+
+
+FILLED = (OrderStatus.FILLED.value, OrderStatus.PARTIALLY_FILLED.value)
+FINISHED_UNFILLED = (OrderStatus.CANCELED.value,)
+
+
+async def fill_rates(
+    session: AsyncSession, user_id: uuid.UUID | None = None, since: datetime | None = None
+) -> dict[str, float | None]:
+    """Per strategy: share of finished paper orders that got (at least partly) filled."""
+    q = select(Order.strategy, Order.status).where(
+        Order.mode == TradingMode.PAPER.value, Order.status.in_(FILLED + FINISHED_UNFILLED)
+    )
+    if user_id is not None:
+        q = q.where(Order.user_id == user_id)
+    if since is not None:
+        q = q.where(Order.created_at >= since)
+    counts: dict[str, list[int]] = {}
+    for strategy, status in (await session.execute(q)).all():
+        c = counts.setdefault(strategy or "model", [0, 0])
+        c[0] += int(status in FILLED)
+        c[1] += 1
+    return {k: (f / n if n else None) for k, (f, n) in sorted(counts.items())}
+
+
+async def strategy_performance(session: AsyncSession, user_id: uuid.UUID) -> dict[str, dict[str, Any]]:
+    """Paper results per strategy for one user: summary metrics plus fill rate."""
+    by = summarize_by(await paper_records(session, user_id), "strategy")
+    rates = await fill_rates(session, user_id)
+    for k, rate in rates.items():
+        by.setdefault(k, summarize([]))["fill_rate"] = rate
+    return by
 
 
 async def model_calibration(session: AsyncSession, days: int = 30, model_version: str | None = None) -> dict[str, Any]:

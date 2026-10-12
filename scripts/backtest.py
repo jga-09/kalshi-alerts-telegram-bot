@@ -1,7 +1,9 @@
 """Run a backtest over data recorded by the live system.
 
     python scripts/backtest.py --start 2026-09-01 --end 2026-09-30 --series KXBTC15M --risk passive \
-        --candles-from-coinbase BTC-USD --out report.json
+        --strategies hammer,drift,fade,surge --candles-from-coinbase BTC-USD --out report.json
+
+--strategies defaults to the preset for --risk. Results are reported overall AND per strategy.
 
 Results are hypothetical. Fees/slippage are estimated; queue position and partial liquidity
 beyond the recorded book snapshots are not modelled.
@@ -22,9 +24,10 @@ from kalshi_ai.backtest.engine import BacktestEngine
 from kalshi_ai.backtest.loader import load_dataset
 from kalshi_ai.data.base import Candle
 from kalshi_ai.db.session import init_engine, session_scope
-from kalshi_ai.domain.enums import RiskMode
+from kalshi_ai.domain.enums import RiskMode, StrategyId
 from kalshi_ai.modeling.prediction import PredictionEngine
 from kalshi_ai.modeling.registry import ModelRegistry
+from kalshi_ai.strategies.config import PRESETS, StrategyConfig
 
 
 async def coinbase_candles(product: str, start: datetime, end: datetime) -> list[Candle]:
@@ -53,6 +56,8 @@ async def main() -> None:
     p.add_argument("--risk", default="passive", choices=[m.value for m in RiskMode])
     p.add_argument("--balance", default="1000")
     p.add_argument("--candles-from-coinbase", default="")
+    p.add_argument("--strategies", default="", help="comma-separated: hammer,drift,fade,surge")
+    p.add_argument("--max-price-cents", type=int, default=90)
     p.add_argument("--out", default="")
     a = p.parse_args()
     start = datetime.fromisoformat(a.start).replace(tzinfo=UTC)
@@ -70,6 +75,12 @@ async def main() -> None:
         risk_mode=RiskMode(a.risk),
         starting_balance=Decimal(a.balance),
         prediction_engine=PredictionEngine(registry),
+        strategies=StrategyConfig(
+            enabled=frozenset(
+                [StrategyId(x.strip()) for x in a.strategies.split(",") if x.strip()] or PRESETS[RiskMode(a.risk)]
+            ),
+            max_price_cents=a.max_price_cents,
+        ),
     ).run()
     data = report.as_dict()
     summary = {
@@ -77,6 +88,13 @@ async def main() -> None:
         for k in ("trade_count", "simulated_pnl", "win_rate", "max_drawdown", "brier_score", "expected_value_per_trade")
     }
     print(json.dumps(summary, indent=2, default=str))
+    print("\nPer strategy (judge by average_trade_pnl, not win_rate):")
+    for name, st in data["by_strategy"].items():
+        fill = data["fill_rate_by_strategy"].get(name)
+        print(
+            f"  {name:7s} trades={st['trades']:<4} win_rate={st['win_rate']} avg_pnl={st['average_trade_pnl']} "
+            f"pnl={st['realized_pnl']} fill_rate={fill}"
+        )
     if a.out:
         await asyncio.to_thread(Path(a.out).write_text, json.dumps(data, indent=2, default=str))
 

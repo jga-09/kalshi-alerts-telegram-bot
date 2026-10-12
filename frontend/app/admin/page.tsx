@@ -103,6 +103,16 @@ function Performance() {
         rows={Object.entries((perf.data?.paper_by_market as Record<string, Json>) ?? {}).map(([k, v]) => ({ market: k, ...v }))}
         columns={["market", "trades", "realized_pnl", "win_rate", "brier_score", "max_drawdown"]}
       />
+      <h2 className="font-semibold">Paper performance by strategy</h2>
+      <p className="text-sm text-gray-500">Judge strategies by average P&amp;L per trade over many trades, not win rate.</p>
+      <Table
+        rows={Object.entries((perf.data?.paper_by_strategy as Record<string, Json>) ?? {}).map(([k, v]) => ({
+          strategy: k,
+          ...v,
+          fill_rate: ((perf.data?.fill_rate_by_strategy as Record<string, number | null>) ?? {})[k] ?? null,
+        }))}
+        columns={["strategy", "trades", "resolved", "average_trade_pnl", "realized_pnl", "win_rate", "fill_rate", "max_drawdown"]}
+      />
     </div>
   );
 }

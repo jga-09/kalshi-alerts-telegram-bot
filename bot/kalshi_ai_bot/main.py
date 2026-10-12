@@ -21,7 +21,7 @@ from kalshi_ai.config import Settings, get_settings
 from kalshi_ai.db.session import init_engine
 from kalshi_ai.logging import configure_logging, get_logger
 from kalshi_ai_bot.container import BotContainer
-from kalshi_ai_bot.handlers import account, admin, guard, markets, onboarding, trading
+from kalshi_ai_bot.handlers import account, admin, guard, markets, onboarding, strategies, trading
 from kalshi_ai_bot.middlewares import ContainerMiddleware, SessionMiddleware, ThrottleMiddleware
 
 log = get_logger(__name__)
@@ -43,6 +43,7 @@ COMMANDS = [
     ("settings", "Settings"),
     ("risk", "Risk level"),
     ("autotrade", "Auto trading"),
+    ("strategies", "Strategies (Hammer, Drift, Fade, Surge)"),
     ("paper", "Paper trading"),
     ("stop", "EMERGENCY STOP"),
     ("resume", "Clear emergency stop"),
@@ -58,7 +59,15 @@ def build_dispatcher(container: BotContainer, storage: BaseStorage | None = None
     dp.message.middleware(session_mw)
     dp.callback_query.middleware(session_mw)
     # Order matters: guard (catch-all) must be last.
-    routers = [onboarding.router, account.router, markets.router, trading.router, admin.router, guard.router]
+    routers = [
+        onboarding.router,
+        account.router,
+        markets.router,
+        trading.router,
+        strategies.router,
+        admin.router,
+        guard.router,
+    ]
     for r in routers:
         r._parent_router = None  # allow rebuilding a dispatcher (tests, restarts) with the module-level routers
     dp.include_routers(*routers)

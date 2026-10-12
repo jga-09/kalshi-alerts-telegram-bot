@@ -29,6 +29,11 @@ python scripts/backtest.py --start 2026-09-01 --end 2026-09-30 --series KXBTC15M
 `max_drawdown`, `brier_score`, `log_loss`, `expected_calibration_error`, per-bin calibration of *all* predictions
 (not just trades), an equity curve, and counts of which risk checks blocked trades.
 
+Strategies: `--strategies hammer,drift,fade,surge` (default: the preset for `--risk`) and `--max-price-cents`.
+The report includes `by_strategy` (the same metrics per strategy) and `fill_rate_by_strategy`. Drift limit
+orders fill only on later frames whose asks reach the limit before the order expires, at the limit price
+with the estimated maker fee.
+
 ## Limitations (results are hypothetical)
 
 * Fills use recorded book snapshots at the frame time; queue position, latency and book changes between

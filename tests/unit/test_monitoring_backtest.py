@@ -80,6 +80,12 @@ async def test_healthy_system_produces_no_critical_alerts(session) -> None:
 # ------------------------------------------------------------------ backtesting
 
 
+@pytest.fixture(autouse=True)
+def _no_surge_blackout(monkeypatch) -> None:
+    """These datasets use wall-clock times; keep Surge's weekday-afternoon window from changing results."""
+    monkeypatch.setattr("kalshi_ai.strategies.engine.in_surge_blackout", lambda *a: False)
+
+
 def dataset(result_yes: bool = True, n_frames: int = 3) -> HistoricalDataset:
     start = utcnow() - timedelta(hours=2)
     frames = []
@@ -107,6 +113,7 @@ async def test_backtest_report_and_settlement() -> None:
     for key in ("win_rate", "max_drawdown", "expected_value_per_trade", "brier_score", "prediction_calibration"):
         assert key in d
     assert "Past performance" in d["disclaimer"]
+    assert set(d["by_strategy"]) <= {"hammer", "drift", "fade", "surge"} and d["by_strategy"]
     losing = await BacktestEngine(dataset(False), prediction_engine=fixed_engine()).run()
     assert D(losing.as_dict()["simulated_pnl"]) < 0
 

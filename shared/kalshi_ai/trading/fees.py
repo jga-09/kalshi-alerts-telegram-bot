@@ -15,3 +15,10 @@ CENT = Decimal("0.01")
 def estimate_taker_fee(contracts: int | Decimal, price: Decimal, rate: Decimal = DEFAULT_TAKER_RATE) -> Decimal:
     raw = rate * Decimal(contracts) * price * (Decimal(1) - price)
     return raw.quantize(CENT, rounding=ROUND_CEILING)
+
+
+DEFAULT_MAKER_RATE = Decimal("0.0175")  # charged only on some series; we assume it always applies
+
+
+def estimate_maker_fee(contracts: int | Decimal, price: Decimal, rate: Decimal = DEFAULT_MAKER_RATE) -> Decimal:
+    return estimate_taker_fee(contracts, price, rate)

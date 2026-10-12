@@ -106,6 +106,8 @@ class Signal(UUIDPKMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     reasons: Mapped[dict[str, Any] | None] = mapped_column()
+    strategy: Mapped[str | None] = mapped_column(String(16))  # hammer | drift | fade | surge (None = model view)
+    entry_style: Mapped[str] = mapped_column(String(8), default="take", server_default="take", nullable=False)
 
 
 class RiskSettings(UUIDPKMixin, TimestampMixin, Base):
@@ -127,6 +129,8 @@ class RiskSettings(UUIDPKMixin, TimestampMixin, Base):
     admin_auto_trading_disabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     market_allowlist: Mapped[list[Any] | None] = mapped_column()
     notify_signals: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Enabled strategies, relative size weights and max entry price; None = preset for risk_mode.
+    strategy_config: Mapped[dict[str, Any] | None] = mapped_column()
 
 
 class PaperAccount(UUIDPKMixin, TimestampMixin, Base):
@@ -171,6 +175,9 @@ class Order(UUIDPKMixin, TimestampMixin, Base):
     edge: Mapped[Decimal | None] = mapped_column(Probability)
     submitted_at: Mapped[datetime | None] = mapped_column()
     validation: Mapped[dict[str, Any] | None] = mapped_column()
+    strategy: Mapped[str | None] = mapped_column(String(16))
+    entry_style: Mapped[str] = mapped_column(String(8), default="take", server_default="take", nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column()  # resting (maker) orders are cancelled after this
 
 
 class Position(UUIDPKMixin, TimestampMixin, Base):
@@ -215,5 +222,6 @@ class PaperTrade(UUIDPKMixin, Base):
     estimated_probability: Mapped[Decimal | None] = mapped_column(Probability)
     edge: Mapped[Decimal | None] = mapped_column(Probability)
     risk_mode: Mapped[RiskMode | None] = mapped_column(StrEnumType(RiskMode))
+    strategy: Mapped[str | None] = mapped_column(String(16))
     opened_at: Mapped[datetime] = mapped_column(default=utcnow, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column()

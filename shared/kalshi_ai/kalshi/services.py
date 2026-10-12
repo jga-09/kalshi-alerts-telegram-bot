@@ -142,9 +142,12 @@ class OrderIntent:
     quantity: int
     limit_price: Decimal  # price per contract of `side`, in dollars (0.01..0.99)
     client_order_id: str
+    time_in_force: str = "immediate_or_cancel"
+    expiration_ts: int | None = None  # unix seconds; only with good_till_canceled (resting orders)
+    post_only: bool = False  # resting orders must never take liquidity
 
 
-def build_v2_order_payload(intent: OrderIntent, *, time_in_force: str = "immediate_or_cancel") -> dict[str, Any]:
+def build_v2_order_payload(intent: OrderIntent, *, time_in_force: str | None = None) -> dict[str, Any]:
     """Translate a BUY intent to Kalshi's V2 single-book order.
 
     The V2 book is quoted in YES prices:
@@ -156,20 +159,30 @@ def build_v2_order_payload(intent: OrderIntent, *, time_in_force: str = "immedia
     price = intent.limit_price.quantize(Decimal("0.0001"))
     if not (CENT <= price <= ONE - CENT):
         raise KalshiValidationError("limit price must be within 0.01..0.99")
+    tif = time_in_force or intent.time_in_force
+    if tif not in ("immediate_or_cancel", "good_till_canceled", "fill_or_kill"):
+        raise KalshiValidationError(f"unsupported time_in_force {tif}")
+    if intent.expiration_ts is not None and tif != "good_till_canceled":
+        raise KalshiValidationError("expiration_time requires good_till_canceled")
     if intent.side == Side.YES:
         book_side, yes_price = "bid", price
     else:
         book_side, yes_price = "ask", (ONE - price)
-    return {
+    payload: dict[str, Any] = {
         "ticker": intent.ticker,
         "client_order_id": intent.client_order_id,
         "side": book_side,
         "count": str(intent.quantity),
         "price": f"{yes_price:.4f}",
-        "time_in_force": time_in_force,
+        "time_in_force": tif,
         "self_trade_prevention_type": "taker_at_cross",
         "cancel_order_on_pause": True,
     }
+    if intent.expiration_ts is not None:
+        payload["expiration_time"] = intent.expiration_ts
+    if intent.post_only:
+        payload["post_only"] = True
+    return payload
 
 
 class KalshiOrderService:
@@ -183,9 +196,7 @@ class KalshiOrderService:
             raise ValueError("KalshiOrderService requires an authenticated client")
         self.client = client
 
-    async def create_order(
-        self, intent: OrderIntent, *, time_in_force: str = "immediate_or_cancel"
-    ) -> CreateOrderResult:
+    async def create_order(self, intent: OrderIntent, *, time_in_force: str | None = None) -> CreateOrderResult:
         payload = build_v2_order_payload(intent, time_in_force=time_in_force)
         data = await self.client.request(
             "POST", "/portfolio/events/orders", json=payload, auth_required=True, retry=False

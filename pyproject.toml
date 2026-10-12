@@ -29,6 +29,7 @@ dependencies = [
     "scikit-learn>=1.6",
     "feedparser>=6.0.11",
     "websockets>=15.0",
+    "tzdata>=2025.2",  # Surge blackout uses America/New_York; slim images may lack system tz data
 ]
 
 [project.optional-dependencies]
